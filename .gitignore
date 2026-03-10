@@ -1,0 +1,30 @@
+# Build directories
+/build/
+/cmake-build-*/
+/out/
+
+# CMake generated files (if someone does an in-source build)
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Makefile
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/compile_commands.json
+
+# Generated boot artifacts and disk images
+*.img
+*.iso
+
+# Emulator/runtime logs
+/bochs.log
+
+# VSCode settings (these are supposed to be per-developer)
+/.vscode
+
+# Temporary/editor clutter
+*~
+*.swp
+*.swo
