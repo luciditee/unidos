@@ -61,7 +61,9 @@ header:
     stage2ErrorCode     dw 0          ; reserved for now, can be used to pass error codes to stage2 if needed
     reserved0           dw 0
 
-%include "lba2chs.asm"
+halt:
+    hlt
+    jmp halt
 
 start:
     cli
@@ -69,20 +71,24 @@ start:
     mov ds, ax
 
     mov si, msg
-.print:
-    lodsb
-    test al, al
-    jz .halt
-    mov ah, 0x0E
-    mov bh, 0x00
-    mov bl, 0x0A
-    int 0x10
-    jmp .print
+    call .print
+    jmp halt
 
-.halt:
-    hlt
-    jmp .halt
+%include "io.inc.asm"
+%include "lba2chs.inc.asm"
 
 msg db 'S2 scaffold reached', 0
+flpdrv                      db 0
+maxRetry                    db 0x03
+newline                     db 13, 10, 0
+errorMsg                    db 13, 10, 'error: ',0
+fallbackMsg                 db 'fallback', 13, 10, 0
+haltMsg                     db ', press any key to reset system',0
+fdReadError                 db 'floppy read error',0
+fdResetError                db 'floppy reset error',0
+flpdx                       dw 0x0000
+flpax                       dw 0x0000
+flpretry                    db 0
+lbaPos                      dw 0
 
 times (BYTES_PER_SECTOR*STAGE2_RESERVED_SECTORS)-($-$$) db 0
