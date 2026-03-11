@@ -8,10 +8,12 @@ org 0x0000
 %endif
 
 %define TOTAL_RESERVED_SECTORS (1 + STAGE2_RESERVED_SECTORS)
+%define FAT_LOAD_BUFFER_ESBX 0x6000
+%define KERNEL_LOAD_SEGMENT 0xF000
 
 ; Skip the header region
 entry:
-    jmp start
+    jmp stage2
     nop
 
 times STAGE2_HEADER_OFFSET-($-$$) db 0
@@ -23,11 +25,11 @@ header:
     versionMinor db 0
 
     ; bootinfo constants
-    totalSize           dw 0 ; will be filled in by stage1
+    totalSize           dw 0 ; must be filled in by stage2
     stage2Flags         dw 0 ; reserved for now
     checksum32          dd 0
-    bootDrive           db 0 ; contents of DL register before stage1 handoff
-    mediaType           db 0 ; for now, always 0x01 meaning FAT12 floppy
+    bootDrive           db 0 ; contents of DL register upon stage1 handoff
+    mediaType           db 1 ; for now, always 0x01 meaning FAT12 floppy
 
     SectorsPerCluster   db FAT_SECTORS_PER_CLUSTER
     ReservedSectors     dw TOTAL_RESERVED_SECTORS
@@ -52,7 +54,7 @@ header:
     totalSectors        dd TOTAL_SECTORS16
     fatStartLba         dd TOTAL_RESERVED_SECTORS
     rootStartLba        dd TOTAL_RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT
-    dataStartLba        dd TOTAL_RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT + ROOT_ENTRIES * 32 / BYTES_PER_SECTOR
+    dataStartLba        dd TOTAL_RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT + ((ROOT_ENTRIES * 32 + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR)
 
     ; stage2 load/handoff info
     stage2LoadPhys      dd 0x00010000 ; physical address where stage2 will be loaded (segment 0x1000, offset 0)  
@@ -65,19 +67,177 @@ halt:
     hlt
     jmp halt
 
-start:
+stage2:
     cli
     mov ax, cs
     mov ds, ax
+    cld
 
+    mov si, initMsg
+    call .print
+
+    ; prepare register/variable assumptions
+    mov [flpdrv], dl
+    xor cx, cx
+
+    ; prepare to search for kernel binary
+    mov ax, [rootStartLba]
+    mov [lbaPos], ax
+    mov ax, FAT_LOAD_BUFFER_ESBX
+    mov es, ax
+    xor bx, bx
+    jmp .read_root
+
+.setupProtectedModePrereqs:
+    ; Just a test message for now (will be replaced soon)
     mov si, msg
+    call .print         ; print a test character to indicate A20 is enabled and we can continue
+    call halt
+
+
+.read_root:
+    mov ax, [lbaPos]    ; load LBA position to ax
+    call lba2chs        ; Convert LBA to CHS in CH, DH, CL. DL clobbered.
+    mov dl, [flpdrv]    ; Restore drive number to DL for BIOS calls
+    mov ax, 0x0201      ; BIOS command: read 1 sector into ES:BX
+    call .floppyread    ; Read the first sector of FAT root directory
+    add bx, 0x200       ; Advance mem buffer by 1 sector (0x200 or 512 bytes)
+    mov ax, [lbaPos]    ; load LBA position to ax
+    inc ax              ; increment it
+    mov [lbaPos], ax    ; copy it back
+    mov si, dot         ; progress bar dot
+    call .print         ; print it for each sector read
+    mov ax, [rootStartLba]
+    add ax, ROOT_DIR_SECTORS
+    cmp [lbaPos], ax    ; have we read all sectors in the root directory? 
+    jne .read_root       ; If not, loop until we are.
+                        ; Fall through to root parser
+.parse_root:
+    push bx             ; preserve buffer offset for later use
+    xor bx, bx          ; start at beginning of buffer again for parsing
+    xor ax, ax          ; clear ax for use in parsing loop
+.parse_root_loop:
+    mov al, [es:bx]     ; load first byte of directory entry
+    cmp al, 0           ; is it null? if so, we've hit the end of the root dir entries
+    je .unexpected_root_end
+    cmp al, 0xE5        ; E5 = deletion marker, so skip if we find one
+    je .next_root_entry
+    mov al, [es:bx+11]  ; check attribute byte for long filename entries
+    cmp al, 0x0F        ; 0x0F means it's a long filename entry, which we also want to skip
+    je .next_root_entry
+    test al, 0x08
+    jnz .next_root_entry ; Volume label entry, not a file, so skip if we find one
+    test al, 0x10
+    jnz .next_root_entry ; Subdirectory entry, not a file, so we skip
+    ;mov si, FAT_LOAD_BUFFER_PHYS ; point SI to the start of the root buffer
+    call .match_kernel      ; Check if this is the stage 2 file we want to load. If so, we'll jump to it and never come back here, so no need to clean up the stack after this call.
+    jz .kernel_found        ; If it is the stage 2 file, jump to the code to handle that case
+    ; old test: print filename
+    ;add si, bx          ; add the current offset to get to the filename
+    ;call .print         ; print the filename (will print garbage currently since we haven't implemented a proper print routine, but we should see progress if it's working at all)
+    ;mov si, newline
+    ;call .print         ; print a newline after the filename
+.next_root_entry:
+    add bx, 0x20        ; advance to next directory entry (32 bytes)
+    cmp bx, ROOT_DIR_SECTORS*512 ; have we parsed all entries in the root directory buffer?
+    jb .parse_root_loop ; if not, loop back to parse the next entry
+.unexpected_root_end:
+    pop bx              ; restore bx if we need it later (probably not at this point, but just in case)
+    mov si, rootEndError
     call .print
     jmp halt
 
+.kernel_found:          ; if jumped to here, kernel was found and we can stage loading it
+    mov ax, [es:bx+FAT_OFFSET_START_CLUSTER]
+    mov [kernelStartCluster], ax           ; store starting cluster
+
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES]
+    mov [kernelSizeBytes], ax              ; size low 16 bits (bytes)
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES+2]
+    mov [kernelSizeBytes+2], ax            ; size high 16 bits (bytes)
+
+    ; Initialize remaining byte counter from discovered file size
+    mov ax, [kernelSizeBytes]
+    mov [kernelRemainingBytes], ax
+    mov ax, [kernelSizeBytes+2]
+    mov [kernelRemainingBytes+2], ax
+
+    ; Initialize current cluster to starting cluster
+    mov ax, [kernelStartCluster]
+    mov [kernelCurCluster], ax
+
+    ; We now know what the starting cluster and size of the kernel are
+    ; Print a test character for now to indicate success
+    pop bx
+    mov si, char
+    call .print
+    jmp .initA20
+
+
+%if 0
+.parse_kernel:
+    mov ax, KERNEL_LOAD_SEGMENT
+    mov es, ax          ; Set ES to the segment we want to load stage 2 into
+    xor bx, bx          ; Offset of 0
+    mov ax, [kernelStartCluster]    ; Load up the starting cluster
+    mov [kernelCurCluster], ax      ; Copy it into the current cluster variable
+.kernel_load_loop:
+    sub ax, 2                       ; Clusters offset from 2, so we subtract 2
+    mov cx, FAT_SECTORS_PER_CLUSTER ; multiply by sectors-per-cluster for current profile
+    mul cx
+    add ax, DATA_START              ; Add the data start offset to get the final LBA value
+    mov [lbaPos], ax                ; Store the LBA of the current cluster as AX will soon be clobbered
+    call .read_lba_sector           ; Read the next cluster of stage 2 into memory
+    add bx, 512*FAT_SECTORS_PER_CLUSTER ; Advance the offset in ES:BX by bytes read this cluster
+    mov ax, [kernelRemainingBytes]  ; Load up the number of bytes we have left to read
+    sub ax, 512*FAT_SECTORS_PER_CLUSTER ; Subtract the number of bytes we just advanced by
+    mov [kernelRemainingBytes], ax  ; Store the updated number of bytes remaining
+    cmp ax, 0
+    jg .kernel_load_loop               ; If we still have more bytes to read, loop back and read the next cluster
+
+    ; load loop done
+
+    jmp halt            ; halt after parsing for now
+%endif
+
+.read_lba_sector:
+    ; input: AX = LBA sector number, DL = drive number (AX clobbered)
+    call lba2chs        ; Convert LBA to CHS in CH, DH, CL. DL clobbered.
+    mov dl, [flpdrv]    ; Restore drive number to DL for BIOS calls
+    mov ax, 0x0201      ; BIOS command: read 1 sector into ES:BX
+    call .floppyread    ; Read the specified sector into ES:BX
+    ret
+
+.match_kernel:          ; == KERNEL MATCHING FUNCTION ==
+                        ; Note: Can't use pusha/popa as we need the result of cmpsb preserved
+    push si             ; preserve si,di,cx for string scanning/printing
+    push di             
+    push cx             
+    mov si, kernelfn    ; load up the kernel 11-byte name
+    mov di, bx          ; point it to where we expect the FAT-loaded filename to be in memory
+    mov cx, 11          ; cap the search at 11-byte filename length
+    repe cmpsb          ; compare DS:SI to ES:DI as strings
+                        ; note: ZF=1 if matching, e.g. use jz if match
+    pop cx              ; restore registers pushed earlier
+    pop di
+    pop si
+    ret
+
 %include "io.inc.asm"
+%include "a20.inc.asm"
 %include "lba2chs.inc.asm"
 
 msg db 'S2 scaffold reached', 0
+initMsg                     db 'stage2 loading kernel', 0
+rootEndError                db 'unexpected end of root directory', 0
+a20Error                    db 13,10,'A 386+ CPU with A20 line support is required to run unidos', 0
+char                        db 'X', 0
+dot                         db '.', 0
+kernelSizeBytes             dd 0
+kernelStartCluster          dd 0
+kernelCurCluster            dd 0
+kernelRemainingBytes        dd 0
+kernelfn                    db 'KERNEL  BIN' ; 11-byte filename for kernel
 flpdrv                      db 0
 maxRetry                    db 0x03
 newline                     db 13, 10, 0
