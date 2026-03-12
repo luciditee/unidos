@@ -51,7 +51,7 @@ add_custom_command(
 
 add_custom_command(
   OUTPUT ${KERNEL_BIN}
-  COMMAND ${NASM_EXECUTABLE} -f bin -o ${KERNEL_BIN} ${KERNEL_SRC}
+  COMMAND ${NASM_EXECUTABLE} -i${NASM_BOOT_INCLUDE_DIR} -f bin -o ${KERNEL_BIN} ${KERNEL_SRC}
   DEPENDS ${KERNEL_SRC}
   COMMENT "Assembling kernel placeholder"
   VERBATIM
