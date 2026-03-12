@@ -2,6 +2,7 @@ bits 16
 org 0x0000
 
 %include "media.asm"
+%include "constants.inc.asm"
 
 %ifndef STAGE2_RESERVED_SECTORS
 %define STAGE2_RESERVED_SECTORS 4
@@ -9,7 +10,9 @@ org 0x0000
 
 %define TOTAL_RESERVED_SECTORS (1 + STAGE2_RESERVED_SECTORS)
 %define FAT_LOAD_BUFFER_ESBX 0x6000
-%define KERNEL_LOAD_SEGMENT 0xF000
+%define KERNEL_LOAD_DEST 0x0010
+%define CODE_SELECTOR 0x08
+%define DATA_SELECTOR 0x10
 
 ; Skip the header region
 entry:
@@ -58,7 +61,7 @@ header:
 
     ; stage2 load/handoff info
     stage2LoadPhys      dd 0x00010000 ; physical address where stage2 will be loaded (segment 0x1000, offset 0)  
-    stage2EntryCS       dw 0x1000
+    stage2EntryCS       dw STAGE2_LOAD_SEGMENT
     stage2EntryIP       dw 0x0000
     stage2ErrorCode     dw 0          ; reserved for now, can be used to pass error codes to stage2 if needed
     reserved0           dw 0
@@ -88,19 +91,84 @@ stage2:
     xor bx, bx
     jmp .read_root
 
-.setupProtectedModePrereqs:
-    ; Just a test message for now (will be replaced soon)
-    mov si, msg
-    call .print         ; print a test character to indicate A20 is enabled and we can continue
-    call halt
+.enterUnreal: ; == UNREAL MODE ENTRYPOINT ==
+    ; Note: We enter this label assuming A20 is set up and that we've
+    ; confirmed the existence of a 386+ system.
+    ; ----
+    ; We want access to BIOS subroutines for convenience, but we also
+    ; want to load the kernel above 1MB, allowing us to reserve conven-
+    ; tional memory for other purposes later.
+    ;
+    ; To do this, we briefly enter protected mode, load flat data 
+    ; descriptors into segment-register caches, then return to real mode
+    ; while keeping expanded memory limits cached in segment registers
 
+    cli                 ; kill interrupts for now
+    xor eax, eax        ; clear all of eax
+    mov ax, cs          ; put the code segment in ax, so that we can...
+    shl eax, 4          ; ...shift left (*16) to get the correct offset
+    add eax, gdt        ; add the gdt pointer to it since it is the
+                        ; offset within CS segment. GDTR needs full
+                        ; linear base address, not segment:offset
+
+    ; GDTR.base must be a linear/physical address, not a segment-relative
+    ; offset. In flat real mode at this point, linear==physical.
+    mov [gdtr+2], eax
+
+    ; Load GDT descriptor (limit+base) prepared above
+    lgdt [gdtr]
+
+    ; Enable protected mode by setting CR0.PE (bit 0).
+    mov eax, cr0        ; get CR0
+    or eax, 1           ; set first bit
+    mov cr0, eax        ; put it back. We are now in protected mode
+
+    ; Far jump is required to load CS from GDT and flush prefetch queue.
+    jmp CODE_SELECTOR:.pm16_entry
+
+.pm16_entry: ; == PROTECTED-MODE STAGING ENTRY ==
+    ; CS now uses CODE_SELECTOR descriptor. We only load FS/GS with flat 
+    ; DATA_SELECTOR, NOT DS/ES, to keep DS/ES unchanged (16-bit conventional)
+    ; for real-mode BIOS/string usage later on
+    ;
+    ; Reloading DS/ES here with flat selector can break assumptions in
+    ; RM code that expects stage2 data labels via DS=CS semantics.
+    mov ax, DATA_SELECTOR
+    mov fs, ax
+    mov gs, ax
+
+    ; Clear CR0.PE to return to real mode.
+    mov eax, cr0
+    and eax, 0xFFFFFFFE
+    mov cr0, eax
+
+    ; Build a far pointer for RM return target:
+    ; - offset = rm16_entry
+    ; - segment = stage2EntryCS (expected 0x1000)
+    mov ax, [stage2EntryCS]
+    mov [cs:rm_far_ptr+2], ax
+    jmp far [cs:rm_far_ptr]
+    
+.rm16_entry: ; == REAL-MODE RETURN POINT AFTER UNREAL SETUP ==
+    ; At this point, CPU mode is real mode again (CR0.PE=0), FS/GS
+    ; hidden descriptor caches remain expanded from PM load, and
+    ; BIOS interrupts are callable again
+    ;
+    ; DS/ES may be interacted with and are intentionally kept 16-bit
+    ; from here, but changing any other segment register forfeits
+    ; those segments' access to upper memory.
+    ; print newline and message to indicate we are beginning the
+    ; kernel loading phase after unreal setup
+    mov si, kernelLoadStartMsg
+    call .print
+    jmp .loadkernel
 
 .read_root:
     mov ax, [lbaPos]    ; load LBA position to ax
     call lba2chs        ; Convert LBA to CHS in CH, DH, CL. DL clobbered.
     mov dl, [flpdrv]    ; Restore drive number to DL for BIOS calls
     mov ax, 0x0201      ; BIOS command: read 1 sector into ES:BX
-    call .floppyread    ; Read the first sector of FAT root directory
+    call .floppyread    ; Read the current sector of FAT root directory
     add bx, 0x200       ; Advance mem buffer by 1 sector (0x200 or 512 bytes)
     mov ax, [lbaPos]    ; load LBA position to ax
     inc ax              ; increment it
@@ -167,11 +235,17 @@ stage2:
     mov [kernelCurCluster], ax
 
     ; We now know what the starting cluster and size of the kernel are
-    ; Print a test character for now to indicate success
+    ; Print a tmessage to indicate success
     pop bx
-    mov si, char
+    mov si, foundMsg
     call .print
-    jmp .initA20
+
+    jmp .initA20 ; this is a 32-bit kernel, so we need A20 gate set up
+
+.loadkernel:
+    ; this will be replaced with loader logic
+    hlt
+    jmp .loadkernel
 
 
 %if 0
@@ -228,7 +302,9 @@ stage2:
 %include "lba2chs.inc.asm"
 
 msg db 'S2 scaffold reached', 0
-initMsg                     db 'stage2 loading kernel', 0
+initMsg                     db 'stage2 finding kernel', 0
+foundMsg                    db 'found', 13, 10, 0
+kernelLoadStartMsg          db 'loading', 0
 rootEndError                db 'unexpected end of root directory', 0
 a20Error                    db 13,10,'A 386+ CPU with A20 line support is required to run unidos', 0
 char                        db 'X', 0
@@ -250,5 +326,36 @@ flpdx                       dw 0x0000
 flpax                       dw 0x0000
 flpretry                    db 0
 lbaPos                      dw 0
+
+align 8
+gdt:
+    dq 0x0000000000000000
+    ; code: base=0x00010000, limit=0xFFFF, 16-bit, present
+    dq 0x00009A010000FFFF
+    ; data flat for unreal (base 0, 4GiB-1)
+    dq 0x00CF92000000FFFF
+gdt_end:
+
+gdtr:
+    ; == GDTR (for LGDT) ==
+    ; 6-byte pseudo-descriptor:
+    ;   [0-1] = GDT limit (size-1)
+    ;   [2-5] = GDT base linear address
+    ;
+    ; Base is patched at runtime in .enterUnreal because stage2 can be
+    ; relocated and we need the actual runtime linear address of gdt
+    dw gdt_end - gdt - 1
+    dd 0                       ; runtime-filled base
+
+rm_far_ptr:
+    ; == FAR POINTER USED TO RETURN TO REAL MODE CODE ==
+    ; Layout expected by jmp far in 16-bit mode is 4 bytes:
+    ;   [bytes 0-1] offset, [bytes 2-3] segment
+    ;
+    ; Offset is fixed to rm16_entry; segment is patched at runtime from
+    ; stage2EntryCS so the same binary can return correctly regardless of
+    ; load segment assumptions.
+    dw stage2.rm16_entry
+    dw 0  
 
 times (BYTES_PER_SECTOR*STAGE2_RESERVED_SECTORS)-($-$$) db 0

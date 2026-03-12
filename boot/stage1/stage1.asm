@@ -1,12 +1,10 @@
 
 
 %include "media.asm"
+%include "constants.inc.asm"
 
-; NOTE: At the moment, this file is EXACTLY 512 bytes.
+; NOTE: At the moment, this file produces a binary EXACTLY 512 bytes long.
 ; It cannot be added to without refactoring.
-
-; Memory map constants
-%define STAGE2_LOAD_SEGMENT 0x1000
 
 ; Support constants
 ; %define PRINT_MAX 11
