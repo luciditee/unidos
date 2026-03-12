@@ -5,7 +5,7 @@ org 0x0000
 %include "constants.inc.asm"
 
 %ifndef STAGE2_RESERVED_SECTORS
-%define STAGE2_RESERVED_SECTORS 4
+%define STAGE2_RESERVED_SECTORS 5
 %endif
 
 %define TOTAL_RESERVED_SECTORS (1 + STAGE2_RESERVED_SECTORS)
@@ -18,6 +18,29 @@ org 0x0000
 %define FAT_BUFFER_SEG          0x6200
 %define BOUNCE_BUFFER_SEG       0x6400
 %define KERNEL_LOAD_LINEAR_ADDR 0x00100000 ; 1MB, where we will load the kernel in memory
+
+%define FAT12_MIN_VALID     0x002
+%define FAT12_RESERVED_LO   0xFF0
+%define FAT12_BAD           0xFF7
+%define FAT12_EOC_MIN       0xFF8
+
+
+%ifndef KERNEL_CHECKSUM
+    ; Unless we get insanely lucky, this will not match the kernel's actual
+    ; CRC32 checksum. This value is intended to be replaced by the build 
+    ; system by calculating the kernel's CRC32 and passing to NASM via -D
+    %define KERNEL_CHECKSUM 0x24201103
+%endif
+
+%macro TEST_DWORD_ZERO 1
+    mov ax, word [%1]
+    or ax, word [%1+2]
+%endmacro
+
+%macro PRINT_DOT 0
+    mov si, dot
+    call .print
+%endmacro
 
 ; Skip the header region
 entry:
@@ -67,6 +90,11 @@ header:
     ; kernel load metadata
     kernelDestLinear    dd KERNEL_LOAD_LINEAR_ADDR
     stage2EntryCS       dw STAGE2_LOAD_SEGMENT
+bootinfo_end:
+
+; bootinfo constants
+%define BOOTINFO_DEST_OFFSET    0x0500 ; linear/physical address
+%define BOOTINFO_SIZE           (bootinfo_end - header)
 
 halt:
     hlt
@@ -168,22 +196,55 @@ stage2:
     call .load_fat12_table  ; can't parse the kernel without reading FAT first
     call .parse_kernel      ; this will load the kernel and then return if successful, 
                             ; or print an error and halt if not
+    call .crc32_finalize    ; verify kernel integrity
+    call .publish_bootinfo  ; kernel expects bootinfo to be copied somewhere
 
-    ; Debug printout for now (next phase is to setup the kernel's expectations)
-    mov si, char
+    ; Print checkmark (sqrt character) to indicate load success
+    mov si, checkmark
     call .print
     mov si, newline
     call .print
     
     jmp .enterPMHandoff
 
+.publish_bootinfo:
+    push ax             ; preserve register state
+    push cx
+    push ds
+    push si
+    push di
+    push es
+
+    mov ax, cs          ; we're using labels to note offsets, so we need CS/DS to be
+    mov ds, ax          ; known and equivalent
+
+    mov word [totalSize], BOOTINFO_SIZE ; patch dynamic bootinfo fields
+    mov al, [flpdrv]                    ; copy boot drive into bootinfo
+    mov [bootDrive], al                 
+    mov eax, [kernelCrcRuntime]         ; copy calculated crc32 into bootinfo
+    mov [checksum32], eax
+
+    xor ax, ax                          ; clear ax
+    mov es, ax                          ; set ES=0 for absolute addressing of bootinfo destination
+    mov di, BOOTINFO_DEST_OFFSET        ; set destination index to absolute address we want to copy to
+    mov si, header                      ; set source index to start of bootinfo header
+    mov cx, BOOTINFO_SIZE               ; set number of bytes to copy
+    cld                                 ; clear direction flag for sanity
+    rep movsb                           ; do the copy until CX=0
+
+    pop es              ; restore registers and return
+    pop di
+    pop si
+    pop ds
+    pop cx
+    pop ax
+    ret
+
 .load_fat12_table:
     push ax                 ; preserve register state
     push bx
     push cx
     push es
-
-    mov [kernelStartCluster+2], 0 ; a FAT12 cluster table is a word, not a dword, so we discard upper half
 
     mov ax, FAT_BUFFER_SEG  ; ES should point to where we want the FAT table loaded in memory
     mov es, ax
@@ -211,6 +272,7 @@ stage2:
 
 .parse_kernel: ; == KERNEL PARSING ENTRYPOINT ==
     mov dword [kernelDestLinear], KERNEL_LOAD_LINEAR_ADDR ; initialize kernelDestLinear
+    mov dword [kernelCrcRuntime], 0xFFFFFFFF    ; crc32 initial value is always uint32_max
                         ; fallthrough to kernel image reading loop 
 .kernel_loop:
     mov ax, [kernelRemainingBytes]
@@ -245,28 +307,26 @@ stage2:
     pop ax                      ; restore LBA sector for next iteration or post-read processing
     add bx, BYTES_PER_SECTOR
     inc ax
-    mov si, dot                 ; progress bar dot
-    call .print                 ; print it for each sector read
+    PRINT_DOT
     loop .read_cluster_sectors
 
     call .copy_cluster_to_himem ; copy data from cluster to final destination in xms
 
-    mov ax, [kernelRemainingBytes]  ; check if we've loaded the entire kernel
-    or ax, [kernelRemainingBytes+2] ; use bitwise or to check both low and high word...
-    jz .kernel_load_done    ; ...since we only care about it being 0 for this jump
+    TEST_DWORD_ZERO kernelRemainingBytes    ; have we loaded the whole kernel?
+    jz .kernel_load_done                    ; if so, exit
 
     mov ax, [kernelCurCluster]
     call .fat12_next_cluster
 
     ; error handling
-    cmp ax, 2
-    jb  .kernel_load_error        ; a cluster value below 0 is invalid, so we fail on that
+    cmp ax, FAT12_MIN_VALID
+    jb  .kernel_load_error        ; a cluster value below 2 is invalid, so we fail on that
 
-    cmp ax, 0xFF0
+    cmp ax, FAT12_RESERVED_LO
     jb  .have_next_cluster        ; a cluster in range 2..0xFEF is valid, so we go to next in chain
-    cmp ax, 0xFF7
+    cmp ax, FAT12_BAD
     je  .kernel_load_error        ; 0xFF7 is a bad cluster marker
-    cmp ax, 0xFF8
+    cmp ax, FAT12_EOC_MIN
     jb  .kernel_load_error        ; 0xFF0..0xFF6 is a reserved cluster marker
 
     ; if here, EOC check passed, there is no other cluster
@@ -335,6 +395,22 @@ stage2:
 .copy_loop:
     mov al, [es:si]         ; load byte from bounce buffer
     mov [fs:edi], al        ; copy it to the final destination in high memory using FS segment
+
+    ; CRC32 calculation on-the-fly as we copy bytes to himem
+    mov dl, al                  ; feed the byte into the CRC32 calculation for runtime integrity verification   
+    mov eax, [kernelCrcRuntime] ; get previous crc value
+    xor al, dl                  ; xor old crc value against most recent byte
+
+%rep 2
+    ; 2 rounds of this loop per byte copied to process low and high nibble
+    mov edx, eax                ; isolate low nibble for table lookup
+    and edx, 0x0F               ; mask to get index for low nibble
+    shr eax, 4                  ; shift eax right to bring high nibble into low nibble position
+    xor eax, [crc32Table+edx*4] ; xor against crc32 table value
+%endrep
+
+    mov [kernelCrcRuntime], eax ; store updated crc value back for next round
+
     inc si                  ; advance source index
     inc edi                 ; advance destination index
     loop .copy_loop         ; keep going until CX=0, with CX indicating either a full cluster's quantity
@@ -354,9 +430,58 @@ stage2:
     pop ax
     ret
 
+.crc32_finalize:
+    call .should_skip_crc32             ; did user hold F8 key to skip?
+    jc .crc32_skipped
+
+    mov eax, [kernelCrcRuntime]         ; get the calculated CRC32 value
+    xor eax, 0xFFFFFFFF                 ; invert all the bits to get final value
+    cmp eax, [kernelCrc32]              ; compare it to the value emitted at compile time
+    je .crc32_ok                        ; indicate success by returning
+    mov si, kernelCrcMismatchError      ; if here, we mismatched, so kernel may be bad
+    call .print                         ; display error message
+
+    mov si, haltMsg                     ; prompt user to reset
+    call .print                 
+    jmp .wait_key_reset
+
+.crc32_skipped:
+    mov si, kernelCrcSkipMsg            ; if here, user chose to skip crc32 check, so indicate that
+    call .print
+    ret
+.crc32_ok:
+    ret
+
+.should_skip_crc32:
+    push ax             ; preserve ax
+.scan_f8:
+    xor ax, ax          ; zero it out
+    mov ah, 1           ; BIOS command AH=1 -- check for keystroke
+    int 0x16            ; if ZF=0 after int16, no keystroke pending
+    jz .no_skip         ; no keystroke, escape skip check
+                        ; if past jz, key is pressed and needs dequeueing
+    mov ah, 0           ; command AH=0 -- read keystroke (blocks if no keystroke ready)
+    int 0x16            ; int16 retrieves keystroke into AX
+
+    cmp al, 0           ; if AL=0, we know it's an extended/non-ASCII key
+    jne .scan_f8        ; if not zero, it's a normal key (jump to start and retry)
+    cmp ah, 0x42        ; check for AH=0x42, aka the F8 key
+    je .skip            ; jump to skip if F8 was held
+    jmp .scan_f8        ; otherwise retry (in practice, releasing an unknown key unblocks
+                        ; the scan and the CRC check will still run due to users
+                        ; being unlikely to press F8 mere (milli|micro)seconds later)
+.skip:
+    stc                 ; set carry flag to indicate skip
+    pop ax              ; restore register state
+    ret
+.no_skip:
+    clc                 ; unset carry flag to indicate no skip
+    pop ax              ; pop ax
+    ret                 
+
 .fat12_next_cluster:    ; == FAT12 CLUSTER CHAIN NAVIGATION PROCEDURE ==
                         ; input: AX = current cluster
-                        ; output: AX = next cluster (12 bit for FAT12)
+                        ; output: AX = next cluster value (12 bit for FAT12)
     push bx
     push dx
     push es
@@ -398,8 +523,7 @@ stage2:
     mov ax, [lbaPos]    ; load LBA position to ax
     inc ax              ; increment it
     mov [lbaPos], ax    ; copy it back
-    mov si, dot         ; progress bar dot
-    call .print         ; print it for each sector read
+    PRINT_DOT           ; print progress dot for each sector read
     mov ax, [rootStartLba]
     add ax, ROOT_DIR_SECTORS
     cmp [lbaPos], ax    ; have we read all sectors in the root directory? 
@@ -443,7 +567,7 @@ stage2:
 .kernel_found:          ; if jumped to here, kernel was found and we can stage loading it
     mov ax, [es:bx+FAT_OFFSET_START_CLUSTER]
     mov [kernelStartCluster], ax            ; store starting cluster
-    mov word [kernelCurCluster+2], 0        ; zero out high dword since FAT12 cluster numbers are 16-bit
+    mov word [kernelCurCluster+2], 0        ; zero out high word since FAT12 cluster numbers are 16-bit
 
     mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES]
     mov [kernelSizeBytes], ax               ; size low 16 bits (bytes)
@@ -459,6 +583,7 @@ stage2:
     ; Initialize current cluster to starting cluster
     mov ax, [kernelStartCluster]
     mov [kernelCurCluster], ax
+    mov [kernelStartCluster+2], 0 ; a FAT12 cluster table is a word, not a dword, so we discard upper half
 
     ; We now know what the starting cluster and size of the kernel are
     ; Print a tmessage to indicate success
@@ -494,46 +619,50 @@ stage2:
     ret
 
 .enterPMHandoff:
-    cli
-    cld
+    cli                 ; interrupts should already be off, but we want to be sure
+    cld                 ; direction flag should be cleared as well 
 
-    xor eax, eax
-    mov ax, cs
-    shl eax, 4
-    add eax, pm32_gdt
-    mov [pm32_gdtr+2], eax
-    lgdt [pm32_gdtr]
+    xor edx, edx                ; At handoff, DL will contain the boot drive number
+    mov dl, byte [flpdrv]       ; stage1 told us our boot drive number, and we need to do this
+                                ; before passing new segment selectors
 
-    xor eax, eax
-    mov ax, cs
-    shl eax, 4
-    add eax, .pm32Entry
-    mov [cs:pm32_far_ptr+0], eax         ; 32-bit offset
-    mov word [cs:pm32_far_ptr+4], PM32_CODE_SELECTOR
+    xor eax, eax            ; clear eax for future use
+    mov ax, cs              ; get current code segment, which is where our GDT is located
+                            ; since we're in real mode with unreal mode limits in FS/GS
+    shl eax, 4              ; convert from segment to linear (physical) address (*16)
+    add eax, pm32_gdt       ; add offset of our protected mode GDT to get the linear address of the GDT
+    mov [pm32_gdtr+2], eax  ; patch the linear address of the PM GDT into the PM GDTR structure for 32-bit entry
+    lgdt [pm32_gdtr]        ; load our new flat GDT
 
-    mov eax, cr0
+    xor eax, eax            ; clear eax again
+    mov ax, cs              ; get code segment again, same reason as before
+    shl eax, 4              ; segment to linear/physical address conversion
+    add eax, .pm32Entry     ; add offset of our protected mode entry point to get its linear address
+    mov [cs:pm32_far_ptr+0], eax                        ; 32-bit offset
+    mov word [cs:pm32_far_ptr+4], PM32_CODE_SELECTOR    ; set segment selector for protected mode entry
+
+    mov eax, cr0            ; enter protected mode
     or eax, 1
     mov cr0, eax
 
-    jmp dword far [cs:pm32_far_ptr]
+    jmp dword far [cs:pm32_far_ptr] ; jump to entrypoint
 
 bits 32
 .pm32Entry:
-    mov ax, PM32_DATA_SELECTOR
-    mov ds, ax
+    mov ax, PM32_DATA_SELECTOR  ; all segments should be the same in a flat memory model, so we use DS
+    mov ds, ax                  ; set all the segments to be equal
     mov es, ax
     mov ss, ax
     mov fs, ax
     mov gs, ax
 
-    mov esp, PM32_STACK_TOP
-    cld
-    cli
+    mov esp, PM32_STACK_TOP     ; initialize the stack pointer
+    cld                         ; once more, ensure direction flag is cleared
+    cli                         ; ditto for interrupts
 
-    xor ebx, ebx
-    mov bl, byte [flpdrv]
-    mov eax, KERNEL_LOAD_LINEAR_ADDR
-    jmp eax
+
+    mov eax, KERNEL_LOAD_LINEAR_ADDR    ; EAX will contain the linear address of the loaded kernel
+    jmp eax                     ; jump to the kernel, ending stage2
 
 bits 16
 
@@ -541,14 +670,16 @@ bits 16
 %include "a20.inc.asm"
 %include "lba2chs.inc.asm"
 
-msg db 'S2 scaffold reached', 0
-initMsg                     db 'stage2 finding kernel', 0
-foundMsg                    db 'found', 13, 10, 0
-kernelLoadStartMsg          db 'loading', 0
+initMsg                     db 'Stage2 finding kernel', 0
+foundMsg                    db 'done', 13, 10, 0
+kernelLoadStartMsg          db 'Loading', 0
 rootEndError                db 'unexpected end of root directory', 0
-kernelPrematureEOFError     db 'kernel image EOF reached!',13,10,'expected more data based on file size', 0
+kernelPrematureEOFError     db 'EOF reached!',13,10,'Expected more data based on file size', 0
+kernelCrcMismatchError      db 'CRC32 checksum fail',13,10,'Kernel possibly corrupted',0
+kernelCrcSkipMsg            db 'skipping crc32',0
+kernelCrcRuntime            dd 0
 a20Error                    db 13,10,'A 386+ CPU with A20 line support is required to run unidos', 0
-char                        db 0xFB, 0
+checkmark                        db 0xFB, 0
 dot                         db '.', 0
 kernelSizeBytes             dd 0
 kernelStartCluster          dd 0
@@ -569,6 +700,8 @@ flpretry                    db 0
 lbaPos                      dw 0
 
 align 8
+
+; flat protected mode gdt (to be replaced by kernel)
 pm32_gdt:
     dq 0x0000000000000000      ; null
     dq 0x00CF9A000000FFFF      ; 32-bit flat code
@@ -583,6 +716,7 @@ pm32_far_ptr:
     dd 0
     dw 0
 
+; unreal mode gdt
 gdt:
     dq 0x0000000000000000
     ; code: base=0x00010000, limit=0xFFFF, 16-bit, present
@@ -613,4 +747,14 @@ rm_far_ptr:
     dw stage2.rm16_entry
     dw 0  
 
-times (BYTES_PER_SECTOR*STAGE2_RESERVED_SECTORS)-($-$$) db 0
+; CRC32 table for polynomial 0xEDB88320, used for runtime kernel 
+; integrity verification.
+align 4
+crc32Table:
+    dd 0x00000000,0x1DB71064,0x3B6E20C8,0x26D930AC
+    dd 0x76DC4190,0x6B6B51F4,0x4DB26158,0x5005713C
+    dd 0xEDB88320,0xF00F9344,0xD6D6A3E8,0xCB61B38C
+    dd 0x9B64C2B0,0x86D3D2D4,0xA00AE278,0xBDBDF21C
+
+times (BYTES_PER_SECTOR*STAGE2_RESERVED_SECTORS)-4-($-$$) db 0
+kernelCrc32 dd KERNEL_CHECKSUM  ; replaced by build system

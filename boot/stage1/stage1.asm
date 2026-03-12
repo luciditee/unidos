@@ -6,9 +6,6 @@
 ; NOTE: At the moment, this file produces a binary EXACTLY 512 bytes long.
 ; It cannot be added to without refactoring.
 
-; Support constants
-; %define PRINT_MAX 11
-
 bits 16
 org 0x7C00
 

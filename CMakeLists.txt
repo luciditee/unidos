@@ -5,6 +5,7 @@ set(UNIDOS_OUT_DIR ${CMAKE_BINARY_DIR}/out)
 file(MAKE_DIRECTORY ${UNIDOS_OUT_DIR})
 
 find_program(NASM_EXECUTABLE nasm REQUIRED)
+find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
 find_program(MKFS_FAT_EXECUTABLE mkfs.fat)
 find_program(MCOPY_EXECUTABLE mcopy)
 find_program(QEMU_I386_EXECUTABLE qemu-system-i386)
@@ -31,7 +32,7 @@ set(NASM_STAGE2_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/stage2/)
 # Boot layout defaults:
 # - LBA 0: stage1 boot sector
 # - LBA 1..N: raw stage2 loader stored in reserved FAT sectors
-set(STAGE2_RESERVED_SECTORS 4 CACHE STRING "Number of reserved sectors used to store raw stage2 after the boot sector")
+set(STAGE2_RESERVED_SECTORS 5 CACHE STRING "Number of reserved sectors used to store raw stage2 after the boot sector")
 
 add_custom_command(
   OUTPUT ${STAGE1_BIN}
@@ -43,8 +44,17 @@ add_custom_command(
 
 add_custom_command(
   OUTPUT ${STAGE2_BIN}
-  COMMAND ${NASM_EXECUTABLE} -i${NASM_BOOT_INCLUDE_DIR} -i${NASM_STAGE2_INCLUDE_DIR} -DSTAGE2_RESERVED_SECTORS=${STAGE2_RESERVED_SECTORS} -f bin -o ${STAGE2_BIN} ${STAGE2_SRC}
-  DEPENDS ${STAGE2_SRC}
+  COMMAND ${CMAKE_COMMAND} -E env
+          NASM_EXECUTABLE=${NASM_EXECUTABLE}
+          PYTHON3_EXECUTABLE=${PYTHON3_EXECUTABLE}
+          KERNEL_BIN=${KERNEL_BIN}
+          STAGE2_SRC=${STAGE2_SRC}
+          STAGE2_BIN=${STAGE2_BIN}
+          NASM_BOOT_INCLUDE_DIR=${NASM_BOOT_INCLUDE_DIR}
+          NASM_STAGE2_INCLUDE_DIR=${NASM_STAGE2_INCLUDE_DIR}
+          STAGE2_RESERVED_SECTORS=${STAGE2_RESERVED_SECTORS}
+          /bin/sh -c "set -eu; CRC32=$($PYTHON3_EXECUTABLE -c 'import sys,zlib;data=open(sys.argv[1],\"rb\").read();print(f\"0x{zlib.crc32(data)&0xffffffff:08X}\")' \"$KERNEL_BIN\"); echo \"Kernel CRC32: $CRC32\"; exec \"$NASM_EXECUTABLE\" -i\"$NASM_BOOT_INCLUDE_DIR\" -i\"$NASM_STAGE2_INCLUDE_DIR\" -DSTAGE2_RESERVED_SECTORS=$STAGE2_RESERVED_SECTORS -DKERNEL_CHECKSUM=$CRC32 -f bin -o \"$STAGE2_BIN\" \"$STAGE2_SRC\""
+  DEPENDS ${STAGE2_SRC} ${KERNEL_BIN}
   COMMENT "Assembling stage2 bootstrap"
   VERBATIM
 )

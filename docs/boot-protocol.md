@@ -59,14 +59,15 @@ Reserved sector count in BPB must match image build settings:
 
 `ReservedSectors = 1 + STAGE2_RESERVED_SECTORS`
 
-## Memory map (stage1 relevant)
+## Memory map (bootloader relevant)
 
 | Address | Usage |
 |---|---|
 | `0x7C00` | stage1 load address (`ORG 0x7C00`) |
 | `0x7C00` | initial stack pointer |
 | `0x10000` | stage2 load destination (`0x1000:0x0000`) |
-| `0x0500` | BOOTINFO target location (planned; currently stage1 does not populate) |
+| `0x0500` | BOOTINFO finalized copy location (`0000:0500`) |
+| `0x00100000` | kernel load destination and protected-mode jump target |
 
 ## Floppy read procedure (stage1)
 
@@ -85,14 +86,71 @@ Error behavior:
 - On failure, emit error message and wait for keypress
 - After keypress, trigger BIOS restart (`int 19h`)
 
-## Stage2 responsibilities (current/future)
+## Stage2 responsibilities (current)
 
 Stage2 owns:
 
-- FAT12 root directory scan for `KERNEL.BIN` (or selected kernel file)
+- A20 enable and unreal-mode setup
+- FAT12 root directory scan for `KERNEL.BIN`
 - FAT12 cluster-chain traversal
-- Kernel image load and transfer
-- BOOTINFO population/finalization (as protocol evolves)
+- Kernel image load to linear `0x00100000`
+- Runtime CRC32 calculation while loading
+- CRC32 verification before handoff (with user override: `F8` skip)
+- BOOTINFO field finalization and copy to `0000:0500`
+- Transition to 32-bit protected mode and kernel jump
+
+## Integrity enforcement (stage2)
+
+Stage2 computes kernel CRC32 incrementally while copying kernel bytes.
+
+- CRC32 polynomial: `0xEDB88320` (reflected)
+- Initial value: `0xFFFFFFFF`
+- Finalization: XOR with `0xFFFFFFFF`
+- Expected checksum source: build-generated `KERNEL_CHECKSUM`, embedded in stage2 image
+
+Behavior:
+
+- If CRC32 matches expected value, boot continues.
+- If CRC32 mismatches, boot is aborted as a fatal error.
+- If `F8` is detected in BIOS keyboard buffer at checksum-finalize time, CRC mismatch enforcement is skipped and boot continues.
+
+## Stage2 -> kernel handoff contract (v1)
+
+At kernel entry (`0x00100000`), stage2 guarantees:
+
+- CPU mode: 32-bit protected mode
+- Paging: disabled (`CR0.PG = 0`)
+- A20: enabled
+- Interrupt flag: cleared (`IF = 0`)
+- Direction flag: cleared (`DF = 0`)
+- Flat GDT active for handoff
+- `CS = PM32_CODE_SELECTOR`
+- `DS = ES = SS = FS = GS = PM32_DATA_SELECTOR`
+- `ESP = PM32_STACK_TOP`
+- Boot drive in `DL` (upper bits of `EDX` cleared by stage2)
+- Kernel image is loaded at linear `0x00100000`
+
+Not guaranteed by stage2:
+
+- IDT initialized
+- PIC/APIC remapped or configured
+- Interrupt handlers installed
+- Paging structures created
+- Any higher-level runtime state beyond BOOTINFO and register/mode contract above
+
+## BOOTINFO contract (v1)
+
+Stage2 publishes BOOTINFO to `0000:0500` before protected-mode handoff.
+
+Fields finalized dynamically by stage2:
+
+- `totalSize`
+- `bootDrive`
+- `checksum32` (runtime-computed kernel CRC32)
+
+All other BOOTINFO fields are static protocol/media metadata emitted from stage2 header constants.
+
+Kernel code may treat `0x00000500` as the canonical BOOTINFO pointer on entry.
 
 ## Stage2 header notes
 
