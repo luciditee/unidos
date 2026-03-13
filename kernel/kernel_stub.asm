@@ -10,13 +10,14 @@ start:
     ;jmp .halt
     ;mov esi, kernel_msg
     mov edi, VGA_TEXT_BUFFER
-    call print_string_pm32
+    call utils.early_print
 
 .halt:
     hlt
     jmp .halt
 
-print_string_pm32:
+utils:
+.early_print:
 .next:
     lodsb
     test al, al
@@ -28,6 +29,9 @@ print_string_pm32:
 .done:
     ret
 
-kernel_msg db 'Kernel reached (PM32)', 0
-
+; Temporary buffer padding
+; This will be removed as kernel grows. We are trying to ensure that
+; the stage2 loader can safely handle loading a multiple-sector-long
+; kernel image. When the kernel breaks past this limit, this padding
+; will be removed as it no longer serves a purpose.
 times (512*10)-($-$$) db 0
