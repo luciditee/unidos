@@ -21,6 +21,7 @@ endif()
 set(STAGE1_SRC ${CMAKE_SOURCE_DIR}/boot/stage1/stage1.asm)
 set(STAGE2_SRC ${CMAKE_SOURCE_DIR}/boot/stage2/stage2.asm)
 set(KERNEL_SRC ${CMAKE_SOURCE_DIR}/kernel/kernel_stub.asm)
+set(KPARAMS_DEFAULT_SRC ${CMAKE_SOURCE_DIR}/kernel/kparams.default.dat)
 
 set(STAGE1_BIN ${UNIDOS_OUT_DIR}/stage1.bin)
 set(STAGE2_BIN ${UNIDOS_OUT_DIR}/stage2.bin)
@@ -33,6 +34,16 @@ set(NASM_STAGE2_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/stage2/)
 # - LBA 0: stage1 boot sector
 # - LBA 1..N: raw stage2 loader stored in reserved FAT sectors
 set(STAGE2_RESERVED_SECTORS 5 CACHE STRING "Number of reserved sectors used to store raw stage2 after the boot sector")
+option(NOKPARAMS "Skip injecting kernel/kparams.default.dat as KPARAMS.DAT into the floppy image" OFF)
+
+set(INJECT_DEFAULT_KPARAMS 1)
+if(NOKPARAMS)
+  set(INJECT_DEFAULT_KPARAMS 0)
+endif()
+
+if(INJECT_DEFAULT_KPARAMS AND NOT EXISTS ${KPARAMS_DEFAULT_SRC})
+  message(FATAL_ERROR "Default kparams file not found: ${KPARAMS_DEFAULT_SRC}. Create it or configure with -DNOKPARAMS=ON.")
+endif()
 
 add_custom_command(
   OUTPUT ${STAGE1_BIN}
@@ -69,16 +80,23 @@ add_custom_command(
 
 add_custom_target(artifacts DEPENDS ${STAGE1_BIN} ${STAGE2_BIN} ${KERNEL_BIN})
 
+set(IMAGE_EXTRA_DEPS)
+if(INJECT_DEFAULT_KPARAMS)
+  list(APPEND IMAGE_EXTRA_DEPS ${KPARAMS_DEFAULT_SRC})
+endif()
+
 add_custom_target(image ALL
   COMMAND ${CMAKE_COMMAND} -E rm -f ${FLOPPY_IMG}
   COMMAND ${CMAKE_COMMAND} -E env
           STAGE1_BIN=${STAGE1_BIN}
           STAGE2_BIN=${STAGE2_BIN}
           KERNEL_BIN=${KERNEL_BIN}
+          KPARAMS_DEFAULT_SRC=${KPARAMS_DEFAULT_SRC}
+          NOKPARAMS=${NOKPARAMS}
           IMG_OUT=${FLOPPY_IMG}
       STAGE2_RESERVED_SECTORS=${STAGE2_RESERVED_SECTORS}
           /bin/sh ${CMAKE_SOURCE_DIR}/tools/make_floppy_image.sh
-  DEPENDS artifacts ${CMAKE_SOURCE_DIR}/tools/make_floppy_image.sh
+  DEPENDS artifacts ${CMAKE_SOURCE_DIR}/tools/make_floppy_image.sh ${IMAGE_EXTRA_DEPS}
   BYPRODUCTS ${FLOPPY_IMG}
   COMMENT "Rebuilding FAT12 floppy image"
   VERBATIM

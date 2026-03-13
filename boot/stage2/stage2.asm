@@ -18,6 +18,8 @@ org 0x0000
 %define FAT_BUFFER_SEG          0x6200
 %define BOUNCE_BUFFER_SEG       0x6400
 %define KERNEL_LOAD_LINEAR_ADDR 0x00100000 ; 1MB, where we will load the kernel in memory
+%define KPARAMS_BUFFER_LINEAR   0x00000700
+%define KPARAMS_MAX_LEN         255
 
 %define FAT12_MIN_VALID     0x002
 %define FAT12_RESERVED_LO   0xFF0
@@ -88,8 +90,10 @@ header:
     dataStartLba        dd TOTAL_RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT + ((ROOT_ENTRIES * 32 + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR)
 
     ; kernel load metadata
-    kernelDestLinear    dd KERNEL_LOAD_LINEAR_ADDR
     stage2EntryCS       dw STAGE2_LOAD_SEGMENT
+    kernelDestLinear    dd KERNEL_LOAD_LINEAR_ADDR
+    kparamsLinearAddr   dd 0
+    kparamsSizeBytes    dd 0
 bootinfo_end:
 
 ; bootinfo constants
@@ -110,8 +114,15 @@ stage2:
     call .print
 
     ; prepare register/variable assumptions
+    ; todo: if these are pre-defined with a constant start value,
+    ; we can probably save some bytes and skip these
     mov [flpdrv], dl
     xor cx, cx
+    mov byte [kernelFound], 0
+    mov byte [kparamsFound], 0
+    mov dword [kparamsFileSize], 0
+    mov dword [kparamsSizeBytes], 0
+    mov dword [kparamsLinearAddr], 0
 
     ; prepare to search for kernel binary
     mov ax, [rootStartLba]
@@ -142,7 +153,7 @@ stage2:
                         ; linear base address, not segment:offset
 
     ; GDTR.base must be a linear/physical address, not a segment-relative
-    ; offset. In flat real mode at this point, linear==physical.
+    ; offset. In real mode with no paging, linear==physical.
     mov [gdtr+2], eax
 
     ; Load GDT descriptor (limit+base) prepared above
@@ -197,6 +208,7 @@ stage2:
     call .parse_kernel      ; this will load the kernel and then return if successful, 
                             ; or print an error and halt if not
     call .crc32_finalize    ; verify kernel integrity
+    call .load_kparams_if_present ; optional kparams load for kernel cmdline
     call .publish_bootinfo  ; kernel expects bootinfo to be copied somewhere
 
     ; Print checkmark (sqrt character) to indicate load success
@@ -222,6 +234,7 @@ stage2:
     mov al, [flpdrv]                    ; copy boot drive into bootinfo
     mov [bootDrive], al                 
     mov eax, [kernelCrcRuntime]         ; copy calculated crc32 into bootinfo
+    xor eax, 0xFFFFFFFF                 ; invert bits to get final CRC32 value
     mov [checksum32], eax
 
     xor ax, ax                          ; clear ax
@@ -341,17 +354,17 @@ stage2:
     mov word [kernelCurCluster+2], 0 ; zero out high word since FAT12 cluster numbers are 16-bit
     jmp .kernel_loop             ; loop back to read the next cluster's worth of sectors and copy it to memory
 
-.kernel_load_done:
+.kernel_load_done:                  ; no more clusters to read
     ret
-.kernel_load_error:
-    mov si, fdReadError
-    call .print
+.kernel_load_error:                 
+    mov si, fdReadError             ; a number of things can go wrong, usually bad sectors or exhausting retries
+    call .print                     ; show error message/reset message
     mov si, haltMsg
     call .print
-    jmp .wait_key_reset
+    jmp .wait_key_reset             
 .kernel_size_mismatch:
-    mov si, kernelPrematureEOFError
-    call .print
+    mov si, kernelPrematureEOFError ; if we stopped traversing clusters early, we can't be certain the kernel loaded
+    call .print                     ; so here, we also print an error/reset message
     mov si, haltMsg
     call .print
     jmp .wait_key_reset
@@ -373,7 +386,7 @@ stage2:
     mov dx, ax
 
     mov ax, [kernelRemainingBytes+2]
-    or ax, ax               ; execution no-op, but sets flags based on high dword...
+    or ax, ax               ; execution no-op, but sets flags based on high word...
     jne .use_cluster_bytes  ; if it's not zero, we have at least one cluster's worth of bytes 
                             ; left to copy, so we can skip the next part 
     mov ax, [kernelRemainingBytes] ; otherwise, we should check how many bytes remain
@@ -419,7 +432,7 @@ stage2:
     movzx eax, si                   ; si contains the number of bytes we just copied
     add [kernelDestLinear], eax     ; update kernelDestLinear with that number
     sub [kernelRemainingBytes], si  ; remaining -= copied
-    sbb word [kernelRemainingBytes+2], 0 ; handle borrow for high dword
+    sbb word [kernelRemainingBytes+2], 0 ; handle borrow for high word
 
     pop es  ; restore all the registers we pushed before returning
     pop di
@@ -452,21 +465,183 @@ stage2:
 .crc32_ok:
     ret
 
+.load_kparams_if_present:
+    push ax     ; preserve registers since we'll be clobbering a lot
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+
+    ; initialize variables to default "not found" state
+    mov dword [kparamsSizeBytes], 0 
+    mov dword [kparamsLinearAddr], 0
+    mov word [kparamsLoadedLen], 0
+
+    ; check if we had previously found a kparams file in root dir
+    cmp byte [kparamsFound], 1
+    jne .kparams_none
+
+    ; remaining = min(kparams file size, KPARAMS_MAX_LEN)
+    mov ax, [kparamsFileSize+2] ; check high word of file size first since if it's nonzero, it's definitely > KPARAMS_MAX_LEN
+    or ax, ax                   ; execution no-op, but sets flags based on high word...
+    jne .kparams_clamp          ; ...because jne consumes flags, so if high word is nonzero, we jump
+                                ; to clamp remaining to KPARAMS_MAX_LEN
+    mov ax, [kparamsFileSize]   ; check if the file size is below or equal to max
+    cmp ax, KPARAMS_MAX_LEN
+    jbe .kparams_set_remaining  ; if file size is already below max, no need to clamp
+.kparams_clamp:
+    mov ax, KPARAMS_MAX_LEN     ; otherwise, we set remaining to the max allowed value to avoid overflow issues
+.kparams_set_remaining:
+    mov [kparamsRemainingBytes], ax         ; set low word of remaining to file size or max, whichever is smaller
+    mov word [kparamsRemainingBytes+2], 0   ; ignore high word because fat12 won't use it
+
+    mov ax, [kparamsStartCluster]           ; set current cluster to starting cluster
+    mov [kparamsCurCluster], ax             ; set current cluster to starting cluster
+    mov word [kparamsCurCluster+2], 0       ; again, ignore high word vis-a-vis fat12
+
+    mov di, KPARAMS_BUFFER_LINEAR   ; destination index should be our absolute/linear buffer address
+    mov ax, [kparamsRemainingBytes] ; check if we have any bytes to copy now
+    or ax, [kparamsRemainingBytes+2]; if there's any 1's in the low or high word, there's bytes to copy
+    jz .kparams_finalize            ; if not, we can skip straight to finalization since there's nothing to copy
+
+.kparams_cluster_loop:
+    ; LBA = dataStartLba + (cluster-2) * sectorsPerCluster
+    mov ax, [kparamsCurCluster]     ; get the current cluster number
+    sub ax, 2                       ; adjust for FAT12 cluster numbering being >2
+
+    xor dx, dx                      ; we're going to need dx and cx later
+    xor cx, cx                      ; zero cx before we load sectorsPerCluster into cl, since it's only a byte value and we want to avoid garbage in high byte
+    mov cl, [sectorsPerCluster]     ; cl is for counting how many sectors left to scan
+    mul cx                          ; ax *= sectorsPerCluster
+    add ax, [dataStartLba]          ; add the starting LBA to get the true LBA we want to read from
+
+    ; read current cluster into bounce buffer
+    push ax                         ; preserve LBA for read function
+    ;push cx                         ; preserve sectors per cluster for read function
+    mov ax, BOUNCE_BUFFER_SEG       ; set up ES for bounce buffer segment
+    mov es, ax
+    xor bx, bx                      ; no offset at this time
+    ;pop cx                          ; restore cx (todo: probably can remove this push/pop pair)
+    pop ax                          ; restore LBA
+
+.kparams_read_cluster:
+    push ax                         ; preserve LBA for read function
+    push cx                         ; preserve sectors per cluster for read function
+    call .read_lba_sector           ; LBA sector read uses lba2chs which clobbers ax/cx
+    pop cx                          ; restore sectors per cluster
+    pop ax                          ; restore LBA for next iteration
+    add bx, BYTES_PER_SECTOR        ; increment buffer offset by one sector's worth
+    inc ax                          ; increment LBA to keep lba/sector read in sync
+    loop .kparams_read_cluster      ; repeat until cx=0
+
+    ; bytes_to_copy = min(remaining, cluster_bytes)
+    xor ax, ax                      ; clear ax
+    mov al, [sectorsPerCluster]     ; load sectors per cluster
+    shl ax, 9                       ; multiply by 512 (bytes per sector) (TODO: should probably tie this to BYTES_PER_SECTOR constant)
+    mov dx, ax                      ; copy sectors per cluster to dx
+
+    mov cx, [kparamsRemainingBytes] ; load remaining bytes to cx for comparison
+    cmp cx, dx                      ; if remaining bytes is less than a full cluster, we should only copy the remaining byte count
+    jbe .kparams_have_count         
+    mov cx, dx                      ; otherwise, we have at least a cluster's worth of bytes left, so we copy the whole cluster
+.kparams_have_count:
+    push cx                         ; preserve byte count for copy function
+
+    ; movsb copies DS:SI -> ES:DI
+    mov ax, BOUNCE_BUFFER_SEG       ; data segment should point to bounce buffer
+    mov ds, ax                      
+    xor si, si                      ; clear source index
+
+    xor ax, ax                      ; clear destination segment for linear addressing
+    mov es, ax                      ; destination is linear 0x0000:DI (kparams buffer)
+    cld
+    rep movsb                       ; copy cluster data from bounce buffer to final buffer
+
+    ; IMPORTANT: restore stage2 data segment before metadata updates
+    mov ax, cs                      ; restore data segment
+    mov ds, ax
+
+    pop ax                          ; restore copy byte count
+    add [kparamsLoadedLen], ax      ; update loaded length by how many bytes we just copied
+    sub [kparamsRemainingBytes], ax ; remove that amount from low word
+    sbb word [kparamsRemainingBytes+2], 0   ; doesn't do anything in fat12, but kept here for fat16/32 support later
+
+    mov cx, [kparamsRemainingBytes] ; if low or high word contains any 1's, we still have bytes to load
+    or cx, [kparamsRemainingBytes+2]
+    jz .kparams_finalize            ; if not, we can finish up
+
+    mov ax, [kparamsCurCluster]     ; repopulate the current cluster into the cluster traversal code
+    call .fat12_next_cluster        ; advance to the next cluster
+
+    cmp ax, FAT12_MIN_VALID         ; if the next cluster value is below 2, it's invalid, so we disable kparams
+    jb  .kparams_disable
+
+    cmp ax, FAT12_RESERVED_LO       ; if the next cluster value is in the reserved range, it's invalid
+    jb  .kparams_have_next          ;
+    cmp ax, FAT12_BAD               ; if the next cluster value is 0xFF7, it's a bad cluster, so we can't trust kparams
+    je  .kparams_disable            ;
+    cmp ax, FAT12_EOC_MIN           ; if the next cluster value is below the EOC minimum, it's invalid
+    jb  .kparams_disable
+
+    ; EOC reached before desired byte count. Keep what we loaded.
+    jmp .kparams_finalize
+.kparams_have_next:
+    mov [kparamsCurCluster], ax         ; update current cluster to next cluster from FAT
+    mov word [kparamsCurCluster+2], 0   ; drop high word in fat12
+    jmp .kparams_cluster_loop           ; continue/repeat cluster load routine
+
+.kparams_finalize:
+    xor ax, ax                  ; if we got here, we should finalize whatever was loaded and null-terminate
+    mov es, ax                  ; set ES=0 to write null-terminator at absolute lowest buffer address
+    mov byte [es:di], 0         ; no offset
+
+    ; now write metadata in stage2 segment
+    mov ax, cs                  ; copy metadata to stage2
+    mov ds, ax                  ; CS = DS for this copy
+    mov dword [kparamsLinearAddr], KPARAMS_BUFFER_LINEAR    ; put the linear address for kparams into scratch
+    mov ax, [kparamsLoadedLen]          ; put the size of kparams we loaded into ax
+    mov [kparamsSizeBytes], ax          ; copy it to scratch
+    mov word [kparamsSizeBytes+2], 0    ; ignore high word in fat12
+    jmp .kparams_done                   ; jump to common exit for both success and "not found" cases
+
+.kparams_disable:
+    mov dword [kparamsLinearAddr], 0    ; nullptr for disabled kparams
+    mov dword [kparamsSizeBytes], 0     ; size 0 for no kparams
+
+.kparams_none:
+    xor ax, ax                          ; zero out first byte of kparams buffer if not found
+    mov ds, ax                          ;
+    mov byte [KPARAMS_BUFFER_LINEAR], 0 ; 
+
+.kparams_done:
+    pop es          ; restore register state and return
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 .should_skip_crc32:
     push ax             ; preserve ax
 .scan_f8:
     xor ax, ax          ; zero it out
     mov ah, 1           ; BIOS command AH=1 -- check for keystroke
-    int 0x16            ; if ZF=0 after int16, no keystroke pending
+    int 0x16            ; if ZF=1 after int16, no keystroke pending
     jz .no_skip         ; no keystroke, escape skip check
                         ; if past jz, key is pressed and needs dequeueing
-    mov ah, 0           ; command AH=0 -- read keystroke (blocks if no keystroke ready)
+    mov ah, 0           ; command AH=0 -- read keystroke (nonblocking, already checked key event availability by now)
     int 0x16            ; int16 retrieves keystroke into AX
 
     cmp al, 0           ; if AL=0, we know it's an extended/non-ASCII key
     jne .scan_f8        ; if not zero, it's a normal key (jump to start and retry)
     cmp ah, 0x42        ; check for AH=0x42, aka the F8 key
-    je .skip            ; jump to skip if F8 was held
+    je .skip            ; jump to skip if F8 was enqueued
     jmp .scan_f8        ; otherwise retry (in practice, releasing an unknown key unblocks
                         ; the scan and the CRC check will still run due to users
                         ; being unlikely to press F8 mere (milli|micro)seconds later)
@@ -536,7 +711,7 @@ stage2:
 .parse_root_loop:
     mov al, [es:bx]     ; load first byte of directory entry
     cmp al, 0           ; is it null? if so, we've hit the end of the root dir entries
-    je .unexpected_root_end
+    je .root_scan_done
     cmp al, 0xE5        ; E5 = deletion marker, so skip if we find one
     je .next_root_entry
     mov al, [es:bx+11]  ; check attribute byte for long filename entries
@@ -546,9 +721,19 @@ stage2:
     jnz .next_root_entry ; Volume label entry, not a file, so skip if we find one
     test al, 0x10
     jnz .next_root_entry ; Subdirectory entry, not a file, so we skip
-    ;mov si, FAT_LOAD_BUFFER_PHYS ; point SI to the start of the root buffer
-    call .match_kernel      ; Check if this is the stage 2 file we want to load. If so, we'll jump to it and never come back here, so no need to clean up the stack after this call.
-    jz .kernel_found        ; If it is the stage 2 file, jump to the code to handle that case
+    call .match_kernel
+    jnz .check_kparams   ; differentiate between kparams/kernel/other files
+    cmp byte [kernelFound], 1   
+    je .check_kparams           
+    call .capture_kernel_entry  ; get the entrypoint of the kernel for loading later
+
+.check_kparams:
+    call .match_kparams         ; match against the filename of the kparams file
+    jnz .next_root_entry        ; if it doesn't match, skip to the next entry
+    cmp byte [kparamsFound], 1  ; did we find kparams?
+    je .next_root_entry         ; skip to next entry if already found
+    call .capture_kparams_entry ; otherwise, capture kparams initial cluster
+
     ; old test: print filename
     ;add si, bx          ; add the current offset to get to the filename
     ;call .print         ; print the filename (will print garbage currently since we haven't implemented a proper print routine, but we should see progress if it's working at all)
@@ -558,40 +743,61 @@ stage2:
     add bx, 0x20        ; advance to next directory entry (32 bytes)
     cmp bx, ROOT_DIR_SECTORS*512 ; have we parsed all entries in the root directory buffer?
     jb .parse_root_loop ; if not, loop back to parse the next entry
+.root_scan_done:
+    pop bx                      ; restore offset
+    cmp byte [kernelFound], 1   ; did we find the kernel?
+    je .kernel_found            ; if so, proceed with kernel load prereqs
+    jmp .root_not_found         ; if not, that's a fatal error
+
 .unexpected_root_end:
     pop bx              ; restore bx if we need it later (probably not at this point, but just in case)
-    mov si, rootEndError
-    call .print
-    jmp halt
+.root_not_found:
+    mov si, rootEndError        ; show root end error message
+    call .print                 ;
+    mov si, haltMsg             ; show halt message
+    call .print                 ;
+    jmp .wait_key_reset         ; "press any key to reset"
 
-.kernel_found:          ; if jumped to here, kernel was found and we can stage loading it
-    mov ax, [es:bx+FAT_OFFSET_START_CLUSTER]
-    mov [kernelStartCluster], ax            ; store starting cluster
-    mov word [kernelCurCluster+2], 0        ; zero out high word since FAT12 cluster numbers are 16-bit
+.capture_kernel_entry:
+    mov ax, [es:bx+FAT_OFFSET_START_CLUSTER]    ; record the starting cluster of the kernel image
+    mov [kernelStartCluster], ax                ;
+    mov word [kernelStartCluster+2], 0          ;
 
-    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES]
-    mov [kernelSizeBytes], ax               ; size low 16 bits (bytes)
-    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES+2]
-    mov [kernelSizeBytes+2], ax             ; size high 16 bits (bytes)
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES]       ; record byte-size of the kernel image
+    mov [kernelSizeBytes], ax                   ;
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES+2]     ;
+    mov [kernelSizeBytes+2], ax
 
-    ; Initialize remaining byte counter from discovered file size
-    mov ax, [kernelSizeBytes]
-    mov [kernelRemainingBytes], ax
-    mov ax, [kernelSizeBytes+2]
-    mov [kernelRemainingBytes+2], ax
+    mov ax, [kernelSizeBytes]                   ; initialize remaining byte count
+    mov [kernelRemainingBytes], ax              ;
+    mov ax, [kernelSizeBytes+2]                 ;
+    mov [kernelRemainingBytes+2], ax            ;
 
-    ; Initialize current cluster to starting cluster
-    mov ax, [kernelStartCluster]
-    mov [kernelCurCluster], ax
-    mov [kernelStartCluster+2], 0 ; a FAT12 cluster table is a word, not a dword, so we discard upper half
+    mov ax, [kernelStartCluster]                ; init current cluster counter with starting cluster value
+    mov [kernelCurCluster], ax                  ;
+    mov word [kernelCurCluster+2], 0            ;
 
-    ; We now know what the starting cluster and size of the kernel are
-    ; Print a tmessage to indicate success
-    pop bx
-    mov si, foundMsg
-    call .print
+    mov byte [kernelFound], 1                   ; set kernel found flag and return
+    ret                                         
 
-    jmp .initA20 ; this is a 32-bit kernel, so we need A20 gate set up
+.capture_kparams_entry:
+    mov ax, [es:bx+FAT_OFFSET_START_CLUSTER]    ; record the starting cluster of the kparams file
+    mov [kparamsStartCluster], ax               ;
+    mov word [kparamsStartCluster+2], 0         ; 
+
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES]       ; record starting byte-size of the kparams file
+    mov [kparamsFileSize], ax                   ;
+    mov ax, [es:bx+FAT_OFFSET_SIZE_BYTES+2]     ; 
+    mov [kparamsFileSize+2], ax                 ;
+
+    mov byte [kparamsFound], 1                  ; set kparams found flag and return
+    ret
+
+.kernel_found:
+    mov si, foundMsg    ; indicate we've found the kernel image
+    call .print         ; 
+
+    jmp .initA20        ; this is a 32-bit kernel, so we need A20 gate set up
 
 
 
@@ -618,7 +824,21 @@ stage2:
     pop si
     ret
 
-.enterPMHandoff:
+.match_kparams:
+    push si             ; simple string comparison function again, but for
+    push di             ; kparams filename (kparamsfn) this time
+    push cx             
+    mov si, kparamsfn
+    mov di, bx
+    mov cx, 11          ; fat12 filenames capped at 11 chars
+    repe cmpsb          ; compare DS:SI to ES:DI as strings
+                        ; note: ZF=1 if matching, e.g. use jz if match
+    pop cx
+    pop di
+    pop si
+    ret
+
+.enterPMHandoff:        ; if we found kparams, there's a bit of extra work to do first
     cli                 ; interrupts should already be off, but we want to be sure
     cld                 ; direction flag should be cleared as well 
 
@@ -626,6 +846,14 @@ stage2:
     mov dl, byte [flpdrv]       ; stage1 told us our boot drive number, and we need to do this
                                 ; before passing new segment selectors
 
+    xor esi, esi                ; init esi to 0 for handoff
+    xor ecx, ecx                ; ecx will contain byte length of kparams
+    mov cx, [kparamsSizeBytes]  ;
+    or cx, cx                   ; if kparams size is zero, we can skip populating esi
+    jz .no_kparams_handoff      ;
+    mov esi, KPARAMS_BUFFER_LINEAR  ; otherwise, esi=kparams linear address, ecx=kparams length
+                                ; fallthrough to the rest of handoff
+.no_kparams_handoff:
     xor eax, eax            ; clear eax for future use
     mov ax, cs              ; get current code segment, which is where our GDT is located
                             ; since we're in real mode with unreal mode limits in FS/GS
@@ -673,13 +901,13 @@ bits 16
 initMsg                     db 'Stage2 finding kernel', 0
 foundMsg                    db 'done', 13, 10, 0
 kernelLoadStartMsg          db 'Loading', 0
-rootEndError                db 'unexpected end of root directory', 0
+rootEndError                db 'unexpected end of root', 0
 kernelPrematureEOFError     db 'EOF reached!',13,10,'Expected more data based on file size', 0
-kernelCrcMismatchError      db 'CRC32 checksum fail',13,10,'Kernel possibly corrupted',0
+kernelCrcMismatchError      db 'checksum fail',13,10,'Kernel possibly corrupted',0
 kernelCrcSkipMsg            db 'skipping crc32',0
 kernelCrcRuntime            dd 0
 a20Error                    db 13,10,'A 386+ CPU with A20 line support is required to run unidos', 0
-checkmark                        db 0xFB, 0
+checkmark                   db 0xFB, 0
 dot                         db '.', 0
 kernelSizeBytes             dd 0
 kernelStartCluster          dd 0
@@ -691,13 +919,21 @@ maxRetry                    db 0x03
 newline                     db 13, 10, 0
 errorMsg                    db 13, 10, 'error: ',0
 fallbackMsg                 db 'fallback', 13, 10, 0
-haltMsg                     db ', press any key to reset system',0
+haltMsg                     db ', press any key to reset',0
 fdReadError                 db 'floppy read error',0
 fdResetError                db 'floppy reset error',0
 flpdx                       dw 0x0000
 flpax                       dw 0x0000
 flpretry                    db 0
 lbaPos                      dw 0
+kernelFound                 db 0
+kparamsFound                db 0
+kparamsStartCluster         dd 0
+kparamsCurCluster           dd 0
+kparamsFileSize             dd 0
+kparamsLoadedLen            dw 0
+kparamsfn                   db 'KPARAMS DAT'
+kparamsRemainingBytes       dd 0
 
 align 8
 

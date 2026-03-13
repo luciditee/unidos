@@ -8,7 +8,7 @@ start:
     cli
     ;mov word [0xB8000], 0x0F4B ; 'K'
     ;jmp .halt
-    mov esi, kernel_msg
+    ;mov esi, kernel_msg
     mov edi, VGA_TEXT_BUFFER
     call print_string_pm32
 

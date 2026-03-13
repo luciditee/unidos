@@ -67,6 +67,7 @@ Reserved sector count in BPB must match image build settings:
 | `0x7C00` | initial stack pointer |
 | `0x10000` | stage2 load destination (`0x1000:0x0000`) |
 | `0x0500` | BOOTINFO finalized copy location (`0000:0500`) |
+| `0x0700` | kparams string buffer (`KPARAMS.DAT`, NUL-terminated) |
 | `0x00100000` | kernel load destination and protected-mode jump target |
 
 ## Floppy read procedure (stage1)
@@ -92,10 +93,12 @@ Stage2 owns:
 
 - A20 enable and unreal-mode setup
 - FAT12 root directory scan for `KERNEL.BIN`
+- Optional FAT12 root directory scan for `KPARAMS.DAT`
 - FAT12 cluster-chain traversal
 - Kernel image load to linear `0x00100000`
 - Runtime CRC32 calculation while loading
 - CRC32 verification before handoff (with user override: `F8` skip)
+- Optional `KPARAMS.DAT` load to `0x00000700`, truncated to max length and NUL-terminated
 - BOOTINFO field finalization and copy to `0000:0500`
 - Transition to 32-bit protected mode and kernel jump
 
@@ -129,6 +132,8 @@ At kernel entry (`0x00100000`), stage2 guarantees:
 - `ESP = PM32_STACK_TOP`
 - Boot drive in `DL` (upper bits of `EDX` cleared by stage2)
 - Kernel image is loaded at linear `0x00100000`
+- If `KPARAMS.DAT` was found and loaded: `ESI = 0x00000700`, `ECX = parameter length (bytes, excluding trailing NUL)`
+- If `KPARAMS.DAT` was missing/disabled/invalid: `ESI = 0`, `ECX = 0`
 
 Not guaranteed by stage2:
 
@@ -147,10 +152,25 @@ Fields finalized dynamically by stage2:
 - `totalSize`
 - `bootDrive`
 - `checksum32` (runtime-computed kernel CRC32)
+- `kparamsLinearAddr` (`0x00000700` when available, otherwise `0`)
+- `kparamsSizeBytes` (loaded parameter length, otherwise `0`)
 
 All other BOOTINFO fields are static protocol/media metadata emitted from stage2 header constants.
 
 Kernel code may treat `0x00000500` as the canonical BOOTINFO pointer on entry.
+
+## Kernel parameters (`KPARAMS.DAT`) contract (v1.1)
+
+Stage2 may load an optional root-directory file named `KPARAMS.DAT`.
+
+- Filename match uses FAT 8.3 (`KPARAMS DAT` internally)
+- Loaded after kernel load+CRC phase
+- Maximum loaded length is bounded (current implementation: `255` bytes)
+- Data is copied to linear `0x00000700`
+- Stage2 always writes a trailing NUL byte in the destination buffer
+- On any kparams load/traversal failure, stage2 disables kparams and continues boot
+
+At kernel entry, prefer register contract (`ESI`/`ECX`) first; BOOTINFO mirrors the same pointer/length.
 
 ## Stage2 header notes
 
