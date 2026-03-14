@@ -246,3 +246,30 @@ vgatext:
     pop eax
     popfd                       
     ret
+
+.cls:
+    push eax
+    push ecx
+    push edx
+    push edi
+    pushfd
+
+    mov ax, (VGA_COLOR(VGA_FG_BRIGHT | VGA_FG_GRAY, VGA_BG_BLACK) << 8) | ' '
+    mov ecx, VGA_DEFAULT_CELLS
+    mov edi, VGA_TEXT_BUFFER
+
+    cld
+    rep stosw
+
+    xor ax, ax
+    call .set_cursor_linear     ; reset cursor to 0
+
+    popfd
+    pop edi
+    pop edx
+    pop ecx
+    pop eax
+
+    
+
+    ret

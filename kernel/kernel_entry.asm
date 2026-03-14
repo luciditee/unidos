@@ -8,13 +8,16 @@ start:
 %include "prekinit_vga.asm"
 
 kernel:
+    call vgatext.cls
     mov dl, 1
+    mov cl, 5
 .testprint:
     ;mov esi, teststr
     call vgatext.puts ; kparams should be pointed to by ESI (or NULL)
     inc dl
     and dx, 0x00FF
-    jmp .testprint
+    dec cl
+    jnz .testprint
 
 .halt:
     hlt
