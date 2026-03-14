@@ -20,7 +20,7 @@ endif()
 
 set(STAGE1_SRC ${CMAKE_SOURCE_DIR}/boot/stage1/stage1.asm)
 set(STAGE2_SRC ${CMAKE_SOURCE_DIR}/boot/stage2/stage2.asm)
-set(KERNEL_SRC ${CMAKE_SOURCE_DIR}/kernel/kernel_stub.asm)
+set(KERNEL_SRC ${CMAKE_SOURCE_DIR}/kernel/kernel_entry.asm)
 set(KPARAMS_DEFAULT_SRC ${CMAKE_SOURCE_DIR}/kernel/kparams.default.dat)
 
 set(STAGE1_BIN ${UNIDOS_OUT_DIR}/stage1.bin)
@@ -28,6 +28,7 @@ set(STAGE2_BIN ${UNIDOS_OUT_DIR}/stage2.bin)
 set(KERNEL_BIN ${UNIDOS_OUT_DIR}/kernel.bin)
 set(FLOPPY_IMG ${UNIDOS_OUT_DIR}/floppy.img)
 set(NASM_BOOT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/)
+set(NASM_KERNEL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/kernel/)
 set(NASM_STAGE2_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/stage2/)
 
 # Boot layout defaults:
@@ -72,9 +73,9 @@ add_custom_command(
 
 add_custom_command(
   OUTPUT ${KERNEL_BIN}
-  COMMAND ${NASM_EXECUTABLE} -i${NASM_BOOT_INCLUDE_DIR} -f bin -o ${KERNEL_BIN} ${KERNEL_SRC}
+  COMMAND ${NASM_EXECUTABLE} -i${NASM_KERNEL_INCLUDE_DIR} -f bin -o ${KERNEL_BIN} ${KERNEL_SRC}
   DEPENDS ${KERNEL_SRC}
-  COMMENT "Assembling kernel placeholder"
+  COMMENT "Assembling kernel entry"
   VERBATIM
 )
 

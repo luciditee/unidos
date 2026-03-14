@@ -1,8 +1,12 @@
-# unidos (scaffold)
+# unidos - *NIX for DOS-era systems
 
-This repository is scaffolded for fast iteration on a BIOS/FAT12 floppy boot chain using NASM + CMake.
+Unidos is a UNIXlike kernel and user environment targeting period-correct 80386 hardware.
+
+More specific documentation about what the project entails can be found in the `docs` directory.
 
 ## Prerequisites (Arch)
+
+I am building on an Arch-based distro, but if you have access to a Linux machine with the following tools, you should be able to compile and run it.
 
 - nasm
 - cmake
@@ -11,6 +15,8 @@ This repository is scaffolded for fast iteration on a BIOS/FAT12 floppy boot cha
 - bochs (optional)
 - dosfstools (`mkfs.fat`)
 - mtools (`mcopy`)
+
+I also recommend PCem for period-correct emulation (I use the AMIBIOS 386DX ROM for testing).
 
 ## Build image
 
@@ -32,11 +38,6 @@ Output image:
 - `stage2` is written raw to reserved sectors starting at LBA 1.
 - FAT12 is formatted with extra reserved sectors so the stage2 reserved area is not part of normal file allocation.
 - `kernel` is copied into the FAT12 filesystem as `KERNEL.BIN`.
-- Default reserved stage2 area is 4 sectors (2048 bytes).
+- Parameters passed to the kernel are stored in the filesystem root in `kparams.dat` and are loaded into `ESI` at kernel entry.
+- Kernel contains basic VGA text driver for debugging on live hardware, and is currently getting descriptors set up to commence on real kernel work.
 
-## Next implementation steps
-
-1. Implement stage1 fixed-sector read from LBA 1..N into `0x1000:0x0000` and transfer control.
-2. Populate `BOOTINFO` at physical `0x0500`.
-3. In stage2, implement FAT12 directory + FAT chain loader for `KERNEL.BIN`.
-4. Implement stage2 checks for BOOTINFO header and required fields.
