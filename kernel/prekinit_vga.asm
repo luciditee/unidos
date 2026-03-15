@@ -27,29 +27,29 @@
 %define VGA_COLOR(fg, bg)   ((fg) | (bg))
 
 vgatext:
-.puts:      ; Input: ESI=pointer to null-terminated string
+.puts:      ; Input: ESI=pointer to null-terminated string, or NULL
             ; DL=VGA attribute byte for entire string
     push esi                    ; preserve ESI, EAX on stack
-    push eax
+    push eax                    
     test esi, esi
     jz ._puts_done              ; if ESI is NULL, do nothing and return
-    cld
+    cld                         ; ensure string operations use forward direction
 ._puts_next:
-    lodsb
-    test al, al
-    jz ._puts_done
-    mov ah, dl
-    call .putch
-    jmp ._puts_next
-._puts_done:
-    pop eax
+    lodsb                       ; load byte at ESI into AL, increment ESI
+    test al, al                 ; test if done (null terminator)
+    jz ._puts_done              ; jump to done if so
+    mov ah, dl                  ; move attribute byte into AH for putch consumption
+    call .putch                 ; print character AL=char AH=attr
+    jmp ._puts_next             ; loop to print next character
+._puts_done:                    
+    pop eax                     ; restore registers and return
     pop esi
     ret
 
 .putch:     ; Input: AL=character, AH=attribute/color byte
             ; Nonprintable control chars \r, \n, \t, or \b are handled
     push ebx                    ; preserve registers on stack
-    push ecx
+    push ecx                    
     push edx
 
     cmp al, 0x0A                ; '\n'
@@ -87,65 +87,68 @@ vgatext:
     call .set_cursor_linear
     jmp ._putch_done
 ._putch_carriageret:
-    call .get_cursor_eax        ; AX = index
-    mov bx, VGA_DEFAULT_COLS
-    xor dx, dx
-    div bx                      ; AX=row, DX=col
+    call .get_cursor_eax        ; find where we are currently
+    mov bx, VGA_DEFAULT_COLS    ; get the number of columns
+    xor dx, dx                  ; clear dx for division
+    div bx                      ; integer division to get current row in AX, discard column in DX
     mul bx                      ; AX=row*80 (col 0)
-    call .normalize_cursor_after_write
-    call .set_cursor_linear
-    jmp ._putch_done
+    call .normalize_cursor_after_write  ; cursor bounds check/scrolling
+    call .set_cursor_linear     ; set cursor position to cell held in AX
+    jmp ._putch_done            ; jump to exit
 ._putch_tab:
     call .get_cursor_eax        ; AX = index
-    mov bx, VGA_DEFAULT_COLS
-    xor dx, dx
-    div bx                      ; AX=row, DX=col
+    mov bx, VGA_DEFAULT_COLS    ; get the number of columns
+    xor dx, dx                  ; clear dx for division
+    div bx                      ; integer division to get current row in AX, current col in DX
 
-    mov cx, dx
-    add cx, 4
-    and cx, 0xFFFC              ; next multiple of 4
-    cmp cx, bx
-    jb ._tab_same_row
+    mov cx, dx                  ; save current col in CX for later
+    add cx, 4                   ; move to next tab stop (every 4 columns)
+    and cx, 0xFFFC              ; round to next multiple of 4
+    cmp cx, bx                  ; if new col >= number of columns, we need to wrap to next line
+    jb ._tab_same_row           ; otherwise, we can stay on same row
     inc ax                      ; wrap to next row if col >= 80
-    xor cx, cx
+    xor cx, cx                  ; reset col to 0
 ._tab_same_row:
     mul bx                      ; AX=row*80
     add ax, cx                  ; + new col
-    call .normalize_cursor_after_write
-    call .set_cursor_linear
-    jmp ._putch_done
+    call .normalize_cursor_after_write ; cursor bounds check/scrolling
+    call .set_cursor_linear     ; set cursor position to cell held in AX
+    jmp ._putch_done            ; jump to exit
 ._putch_backspace:
     call .get_cursor_eax        ; AX = index
     test ax, ax                 ; if cursor is at 0, do nothing
-    jz ._putch_done             ;
+    jz ._putch_done             ; 
     dec ax                      ; otherwise, simply decrement to move back 1 cell
-    call .normalize_cursor_after_write
+    call .normalize_cursor_after_write ; cursor bounds check/scrolling
     call .set_cursor_linear
 ._putch_done:
-    pop edx                     ; restore EDX
-    pop ecx                     ; restore ECX
-    pop ebx                     ; restore EBX
+    pop edx                     ; restore registers and return
+    pop ecx                     ; 
+    pop ebx                     ; 
     ret
 
-._vga_scroll:                  ; scroll text buffer up by 1 row
-    push eax
+._vga_scroll:   ; internal: scroll text buffer up by 1 row
+    push eax    ; preserve registers on stack
     push ecx
     push esi
     push edi
 
-    cld
+    cld         ; ensure forward direction for string ops
+    ; Move rows 1..24 up to 0..23. Each row is VGA_DEFAULT_COLS * 2 bytes, so 160 bytes per row.
+    ; We can move 4 bytes at a time with movsd, so ECX = (160/4) * 24 = 960 dwords.
     mov esi, VGA_TEXT_BUFFER + VGA_ROW_BYTES      ; source: row 1
     mov edi, VGA_TEXT_BUFFER                      ; dest:   row 0
     mov ecx, ((VGA_DEFAULT_ROWS - 1) * VGA_ROW_BYTES) / 4 ; 3840/4 = 960 dwords
     rep movsd
 
+    ; Clear last row (row 24) by writing spaces with default attribute
     mov edi, VGA_TEXT_BUFFER + ((VGA_DEFAULT_ROWS - 1) * VGA_ROW_BYTES)
     mov ah, VGA_ATTR_DEFAULT
     mov al, ' '
     mov ecx, VGA_DEFAULT_COLS
     rep stosw                                      ; clear last row
 
-    pop edi
+    pop edi     ; restore registers and return
     pop esi
     pop ecx
     pop eax
@@ -162,23 +165,23 @@ vgatext:
     ret
 
 .get_cursor_eax:                ; Returns cursor position in AX (EAX zero-extended)
-    push edx
-    xor eax, eax
+    push edx                    ; preserve EDX on stack
+    xor eax, eax                ; clear EAX
     mov dx, VGA_CURSOR_PORT     ; 0x3D4
 
-    mov al, 0x0E
-    out dx, al                  ; select high cursor byte
-    inc dx                      ; 0x3D5
-    in al, dx
-    mov ah, al                  ; AH = high byte
+    mov al, 0x0E                ; select high cursor byte
+    out dx, al                  ; send command
+    inc dx                      ; 0x3D5 is the port we get result from 
+    in al, dx                   ; read port to get result from VGA CRTC
+    mov ah, al                  ; AH now holds high byte
 
     dec dx                      ; 0x3D4
-    mov al, 0x0F
-    out dx, al                  ; select low cursor byte
-    inc dx                      ; 0x3D5
-    in al, dx                   ; AL = low byte
+    mov al, 0x0F                ; select low cursor byte
+    out dx, al                  ; send command
+    inc dx                      ; 0x3D5 is VGA CRTC port for result of last command
+    in al, dx                   ; read result. AL now holds low byte
 
-    pop edx
+    pop edx                     ; restore EDX, return with AX=cursor index
     ret
 
 .set_cursor:                    ; Input: AL=row, AH=col
@@ -187,7 +190,7 @@ vgatext:
     xor edx, edx
     xor ebx, ebx
 
-    mov bx, ax                  ; BH=col. After SHR, BX=col
+    mov bx, ax                  ; AX packs row/col: AL=row, AH=col. Shift to isolate col in BX
     shr bx, 8                   ; BX = col
     and ax, 0x00FF              ; AX = row
 
@@ -197,8 +200,8 @@ vgatext:
     pop ebx                     ; restore EBX, EDX. We do this so that ebx/edx are preserved
     pop edx                     ; regardless of calling set_cursor or set_cursor_linear
 .set_cursor_linear:             ; Input: AX=linear cursor index
-    push edx                    ; preserve DX on stack
-    push ebx                    ; preserve BX on stack
+    push edx                    ; preserve EDX, EBX on stack
+    push ebx                    
 
     mov bx, ax                  ; preserve position bytes: BL=low, BH=high
     mov dx, VGA_CURSOR_PORT     ; port 0x3D4
@@ -248,28 +251,26 @@ vgatext:
     ret
 
 .cls:
-    push eax
+    push eax    ; preserve register state and flags
     push ecx
     push edx
     push edi
     pushfd
 
+    ; build a default cell value: blank space char, white on black
     mov ax, (VGA_COLOR(VGA_FG_BRIGHT | VGA_FG_GRAY, VGA_BG_BLACK) << 8) | ' '
-    mov ecx, VGA_DEFAULT_CELLS
-    mov edi, VGA_TEXT_BUFFER
+    mov ecx, VGA_DEFAULT_CELLS  ; set how many cells we expect to iterate
+    mov edi, VGA_TEXT_BUFFER    ; point to start of VGA text buffer
 
-    cld
-    rep stosw
+    cld                         ; ensure forward direction for string ops
+    rep stosw                   ; write default cell value held in AX into text buffer
 
-    xor ax, ax
-    call .set_cursor_linear     ; reset cursor to 0
+    xor ax, ax                  ; ax=0 means top-left on screen (start of text buffer)
+    call .set_cursor_linear     ; reset cursor to value in ax
 
-    popfd
+    popfd       ; restore registers and flags, return
     pop edi
     pop edx
     pop ecx
     pop eax
-
-    
-
     ret

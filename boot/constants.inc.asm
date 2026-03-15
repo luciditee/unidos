@@ -7,4 +7,7 @@
 ; Protected mode constants
 %define PM32_CODE_SELECTOR 0x08
 %define PM32_DATA_SELECTOR 0x10
+
+%ifndef PM32_STACK_TOP
 %define PM32_STACK_TOP     0x0009FC00
+%endif
