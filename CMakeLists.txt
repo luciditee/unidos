@@ -1,11 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
-project(unidos_bootstrap LANGUAGES NONE)
+project(unidos_bootstrap LANGUAGES C)
+
+set(UNIDOS_DISPLAYNAME "UNIDOS")
+set(UNIDOS_VERSION_MAJOR 0)
+set(UNIDOS_VERSION_MINOR 1)
+set(UNIDOS_VERSION_PATCH 0)
+set(UNIDOS_VERSION "\"${UNIDOS_DISPLAYNAME} ${UNIDOS_VERSION_MAJOR}.${UNIDOS_VERSION_MINOR}.${UNIDOS_VERSION_PATCH}\"")
 
 set(UNIDOS_OUT_DIR ${CMAKE_BINARY_DIR}/out)
 file(MAKE_DIRECTORY ${UNIDOS_OUT_DIR})
 
 find_program(NASM_EXECUTABLE nasm REQUIRED)
 find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
+find_program(LD_EXECUTABLE ld REQUIRED)
+find_program(OBJCOPY_EXECUTABLE objcopy REQUIRED)
 find_program(MKFS_FAT_EXECUTABLE mkfs.fat)
 find_program(MCOPY_EXECUTABLE mcopy)
 find_program(QEMU_I386_EXECUTABLE qemu-system-i386)
@@ -20,13 +28,30 @@ endif()
 
 set(STAGE1_SRC ${CMAKE_SOURCE_DIR}/boot/stage1/stage1.asm)
 set(STAGE2_SRC ${CMAKE_SOURCE_DIR}/boot/stage2/stage2.asm)
-set(KERNEL_SRC ${CMAKE_SOURCE_DIR}/kernel/kernel_entry.asm)
+
+# Explicit kernel source lists. Add new files here.
+set(KERNEL_ASM_SOURCES
+  ${CMAKE_SOURCE_DIR}/kernel/kernel_entry.asm
+  ${CMAKE_SOURCE_DIR}/kernel/debug_c_abi.asm
+)
+
+set(KERNEL_C_SOURCES
+  ${CMAKE_SOURCE_DIR}/kernel/kmain.c
+  ${CMAKE_SOURCE_DIR}/kernel/isr.c
+)
+
+set(KERNEL_INCLUDE_DIRS
+  ${CMAKE_SOURCE_DIR}/kernel/include
+)
+
+set(KERNEL_LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/kernel/linker.ld)
 set(KPARAMS_DEFAULT_SRC ${CMAKE_SOURCE_DIR}/kernel/kparams.default.dat)
 
 set(STAGE1_BIN ${UNIDOS_OUT_DIR}/stage1.bin)
 set(STAGE2_BIN ${UNIDOS_OUT_DIR}/stage2.bin)
+set(KERNEL_ELF ${UNIDOS_OUT_DIR}/kernel.elf)
 set(KERNEL_BIN ${UNIDOS_OUT_DIR}/kernel.bin)
-set(KERNEL_DEPFILE ${UNIDOS_OUT_DIR}/kernel.d)
+set(KERNEL_OBJ_DIR ${UNIDOS_OUT_DIR}/kernel_obj)
 set(FLOPPY_IMG ${UNIDOS_OUT_DIR}/floppy.img)
 set(NASM_BOOT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/)
 set(NASM_KERNEL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/kernel/)
@@ -72,12 +97,81 @@ add_custom_command(
   VERBATIM
 )
 
+set(KERNEL_OBJECTS)
+
+foreach(KERNEL_ASM_SOURCE IN LISTS KERNEL_ASM_SOURCES)
+  get_filename_component(KERNEL_ASM_NAME_WE ${KERNEL_ASM_SOURCE} NAME_WE)
+  set(KERNEL_ASM_OBJ ${KERNEL_OBJ_DIR}/${KERNEL_ASM_NAME_WE}.o)
+  set(KERNEL_ASM_DEPFILE ${KERNEL_OBJ_DIR}/${KERNEL_ASM_NAME_WE}.d)
+
+  add_custom_command(
+    OUTPUT ${KERNEL_ASM_OBJ}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KERNEL_OBJ_DIR}
+    COMMAND ${NASM_EXECUTABLE} -DUNIDOS_VERSION=${UNIDOS_VERSION} -i${NASM_KERNEL_INCLUDE_DIR} -f elf32 -MD ${KERNEL_ASM_DEPFILE} -o ${KERNEL_ASM_OBJ} ${KERNEL_ASM_SOURCE}
+    DEPFILE ${KERNEL_ASM_DEPFILE}
+    DEPENDS ${KERNEL_ASM_SOURCE}
+    COMMENT "Assembling ${KERNEL_ASM_NAME_WE}.asm"
+    VERBATIM
+  )
+
+  list(APPEND KERNEL_OBJECTS ${KERNEL_ASM_OBJ})
+endforeach()
+
+set(KERNEL_C_INCLUDE_FLAGS)
+foreach(KERNEL_INCLUDE_DIR IN LISTS KERNEL_INCLUDE_DIRS)
+  list(APPEND KERNEL_C_INCLUDE_FLAGS -I${KERNEL_INCLUDE_DIR})
+endforeach()
+
+foreach(KERNEL_C_SOURCE IN LISTS KERNEL_C_SOURCES)
+  get_filename_component(KERNEL_C_NAME_WE ${KERNEL_C_SOURCE} NAME_WE)
+  set(KERNEL_C_OBJ ${KERNEL_OBJ_DIR}/${KERNEL_C_NAME_WE}.o)
+  set(KERNEL_C_DEPFILE ${KERNEL_OBJ_DIR}/${KERNEL_C_NAME_WE}.d)
+
+  add_custom_command(
+    OUTPUT ${KERNEL_C_OBJ}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${KERNEL_OBJ_DIR}
+    COMMAND ${CMAKE_C_COMPILER}
+            -m32
+            -ffreestanding
+            -fno-stack-protector
+            -fno-pie
+            -nostdlib
+            -nostartfiles
+            -Wall
+            -Wextra
+            ${KERNEL_C_INCLUDE_FLAGS}
+            -DUNIDOS_VERSION=${UNIDOS_VERSION}
+            -MMD
+            -MF ${KERNEL_C_DEPFILE}
+            -c ${KERNEL_C_SOURCE}
+            -o ${KERNEL_C_OBJ}
+    DEPFILE ${KERNEL_C_DEPFILE}
+    DEPENDS ${KERNEL_C_SOURCE}
+    COMMENT "Compiling ${KERNEL_C_NAME_WE}.c"
+    VERBATIM
+  )
+
+  list(APPEND KERNEL_OBJECTS ${KERNEL_C_OBJ})
+endforeach()
+
+add_custom_command(
+  OUTPUT ${KERNEL_ELF}
+  COMMAND ${LD_EXECUTABLE}
+          -m elf_i386
+          -nostdlib
+          -T ${KERNEL_LINKER_SCRIPT}
+          -o ${KERNEL_ELF}
+          ${KERNEL_OBJECTS}
+  DEPENDS ${KERNEL_OBJECTS} ${KERNEL_LINKER_SCRIPT}
+  COMMENT "Linking kernel ELF"
+  VERBATIM
+)
+
 add_custom_command(
   OUTPUT ${KERNEL_BIN}
-  COMMAND ${NASM_EXECUTABLE} -i${NASM_KERNEL_INCLUDE_DIR} -f bin -MD ${KERNEL_DEPFILE} -o ${KERNEL_BIN} ${KERNEL_SRC}
-  DEPFILE ${KERNEL_DEPFILE}
-  DEPENDS ${KERNEL_SRC}
-  COMMENT "Assembling kernel entry"
+  COMMAND ${OBJCOPY_EXECUTABLE} -O binary ${KERNEL_ELF} ${KERNEL_BIN}
+  DEPENDS ${KERNEL_ELF}
+  COMMENT "Generating flat kernel binary"
   VERBATIM
 )
 

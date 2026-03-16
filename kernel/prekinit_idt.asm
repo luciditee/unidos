@@ -6,8 +6,8 @@ bits 32
 global idt_init
 global isr_common_entry
 
+extern isr_dispatch
 extern vgatext.puts
-extern debug.dumpregisters
 
 section .text
 
@@ -23,20 +23,20 @@ section .text
 %endmacro
 
 idt_init:
-    pushad
-    cld
+    pushad  ; save all general-purpose registers
+    cld     ; clear direction flag to ensure string ops increment
 
-    xor ebx, ebx
-.init_loop:
-    mov eax, [isr_stub_table + ebx*4]
-    lea edi, [idt_table + ebx*8]
-    IDT_SET_GATE
-    inc ebx
-    cmp ebx, 256
+    xor ebx, ebx    ; ebx is our vector index, start at 0
+.init_loop:         ; for each IDT entry...
+    mov eax, [isr_stub_table + ebx*4]   ; get the handler address for this vector
+    lea edi, [idt_table + ebx*8]        ; get the address of the current IDT entry (8 bytes each)
+    IDT_SET_GATE    ; macro sets up the gate for this vector in the IDT
+    inc ebx         ; next vector
+    cmp ebx, 256    ; loop until all 256 vectors are set up
     jl .init_loop
 
-    lidt [idtr]
-    popad
+    lidt [idtr]     ; load the IDT with this new table
+    popad           ; restore GP registers and return
     ret
 
 ; Common entry for all vectors.
@@ -47,39 +47,39 @@ idt_init:
 ;   [esp+12] = cs
 ;   [esp+16] = eflags
 isr_common_entry:
-    cld
-    mov eax, cr2
-    push eax
-    push gs
-    push fs
-    push es
-    push ds
-    pushad
+    cld             ; set direction flag 0/fwd
+                    ; note: this happens throughout kernel code and is because
+                    ; string ops are used everywhere, and we cannot be certain of
+                    ; the state of EFLAGS.
 
-    mov ax, GDT_SEL_KDATA
-    mov ds, ax
-    mov es, ax
+    mov eax, cr2    ; copy CR2 to eax (later useful for #PF)
+    push eax        ; save CR2 on stack for isr_dispatch
+    push gs         ; note: all stack manipulation here and at the end of the common entry
+    push fs         ; are to match the trap_frame_t struct exactly (in reverse order, because
+    push es         ; that's how x86 stacks work)
+    push ds
+    pushad          ; push general-purpose registers (also for trap_frame) but not eflags
+
+    mov ax, GDT_SEL_KDATA ; load kernel data segment selector into AX
+    mov ds, ax      ; all segment registers should point here for isr_dispatch
+    mov es, ax      ; since we use a flat segmentation model
     mov fs, ax
     mov gs, ax
 
-    mov esi, isr_fatal_msg
-    mov dl, 0x0C                ; bright red on black   
-    call vgatext.puts
+    ; pass trap_frame_t* (ESP points at trap_frame.edi)
+    push esp            ; push pointer to trap frame as argument
+    call isr_dispatch   ; call isr_dispatch to handle interrupt in C
+    add esp, 4          ; clean up argument
 
-    lea ebp, [esp + 52]      ; normalized frame base
-    ; [ebp+0]  vector
-    ; [ebp+4]  error
-    ; [ebp+8]  eip
-    ; [ebp+12] cs
-    ; [ebp+16] eflags
-    ; [esp+48] cr2
-
-    ; Basic diagnostic dump
-    mov eax, [ebp + 0]       ; vector
-    mov edx, [ebp + 4]       ; error
-    call debug.dumpregisters
-    mov esi, _debug_newline
-    call vgatext.puts
+    ; restore context
+    popad               ; restore GP registers
+    pop ds              ; restore segment registers in reverse order
+    pop es
+    pop fs
+    pop gs
+    add esp, 4      ; discard saved cr2
+    add esp, 8      ; discard normalized vector + error
+    iretd           ; return from interrupt, restoring EIP, CS from stack
 
 .halt:
     cli
@@ -89,10 +89,8 @@ isr_common_entry:
 section .data
 align 8
 idt_table:
-    times 256 dq 0
+    times 256 dq 0  ; 256 entries, 8 bytes each, initialized to zero
 
-idtr:
-    dw (256*8 - 1)
-    dd idt_table
-
-isr_fatal_msg db 10,'FATAL EXCEPTION ',10,0
+idtr:               ; IDT register structure for lidt instruction
+    dw (256*8 - 1)  ; limit = size
+    dd idt_table    ; pointer to IDT base

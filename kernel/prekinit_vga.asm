@@ -26,6 +26,13 @@
 %define VGA_BLINK           (8 << 4)
 %define VGA_COLOR(fg, bg)   ((fg) | (bg))
 
+global vgatext.get_cursor_eax
+global vgatext.puts
+global vgatext.puch
+global vgatext.set_cursor_linear
+global vgatext.set_cursor_enabled
+global vgatext.cls
+
 vgatext:
 .puts:      ; Input: ESI=pointer to null-terminated string, or NULL
             ; DL=VGA attribute byte for entire string
