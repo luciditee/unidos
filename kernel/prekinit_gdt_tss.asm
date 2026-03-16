@@ -1,8 +1,4 @@
-%define GDT_SEL_KCODE 0x08
-%define GDT_SEL_KDATA 0x10
-%define GDT_SEL_UCODE 0x18
-%define GDT_SEL_UDATA 0x20
-%define GDT_SEL_TSS   0x28
+
 
 bits 32
 

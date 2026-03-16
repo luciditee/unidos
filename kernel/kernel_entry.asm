@@ -14,6 +14,8 @@ start:
 %include "prekinit_vga.asm"
 %include "prekinit_debug.asm"
 %include "prekinit_gdt_tss.asm"
+%include "prekinit_idt.asm"
+%include "prekinit_isr_stubs.asm"
 
 ; Assumptions made at entry:
 ; - ESI points to kparams (or is NULL)
@@ -22,8 +24,27 @@ start:
 ; - The VGA text mode is active and can be used for output
 
 kernel:
-    call gdt_tss_init
-    call vgatext.cls
+    call gdt_tss_init   ; GDT and TSS *must* exist before we can do anything else
+    call idt_init       ; IDT must also exist, but handlers won't be installed until later
+    call vgatext.cls    ; Clear screen. Partly serves as a debugging checkpoint
+                        ; to indicate of GDT/TSS/IDT installed without error
+
+.maskpic:
+    ; Mask PIC to only allow timer interrupts (IRQ0) for now.
+    ; These will be unmasked on the C side
+    mov al, 0xFF
+    out 0x21, al
+    out 0xA1, al
+
+    ; Basic exception tests:
+    ;xor edx, edx
+    ;mov eax, 420
+    ;xor ecx, ecx
+    ;div ecx ; force #DE to test handler
+    ;ud2 ; intentionally cause #UD to test
+    ;mov ax, 0x0030
+    ;mov ds, ax  ; force GPF by loading a bad segment selector
+
     
     mov dl, 1
     mov cl, 32
