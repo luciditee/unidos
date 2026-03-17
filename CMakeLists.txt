@@ -37,7 +37,9 @@ set(KERNEL_ASM_SOURCES
 
 set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/kmain.c
-  ${CMAKE_SOURCE_DIR}/kernel/isr.c
+  ${CMAKE_SOURCE_DIR}/kernel/isr.c  
+  ${CMAKE_SOURCE_DIR}/kernel/pit.c
+  ${CMAKE_SOURCE_DIR}/kernel/pic.c
 )
 
 set(KERNEL_INCLUDE_DIRS
