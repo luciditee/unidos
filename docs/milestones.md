@@ -29,20 +29,20 @@ Exit criteria:
 Goal: establish deterministic protected-mode execution environment under kernel control.
 
 ### 1.1 GDT hardening
-- [ ] Define a descriptive GDT layout with named selectors:
+- [X] Define a descriptive GDT layout with named selectors:
 	- null descriptor
 	- kernel code (ring 0, 32-bit, base=0, limit=4GiB)
 	- kernel data (ring 0, 32-bit, base=0, limit=4GiB)
 	- user code (ring 3, 32-bit, base=0, limit=4GiB) *(can be unused initially, define now)*
 	- user data (ring 3, 32-bit, base=0, limit=4GiB) *(can be unused initially, define now)*
 	- TSS descriptor (ring 0 system segment)
-- [ ] Place GDT at a fixed known kernel symbol/location and load with `lgdt` in kernel init.
-- [ ] Reload segment registers and perform far jump to activate new `CS`.
+- [X] Place GDT at a fixed known kernel symbol/location and load with `lgdt` in kernel init.
+- [X] Reload segment registers and perform far jump to activate new `CS`.
 
 ### 1.2 TSS baseline
-- [ ] Allocate one TSS structure and load with `ltr`.
-- [ ] Set `SS0:ESP0` for privilege transitions (even before user mode, prepare now).
-- [ ] Keep I/O bitmap disabled or all-deny initially.
+- [X] Allocate one TSS structure and load with `ltr`.
+- [X] Set `SS0:ESP0` for privilege transitions (even before user mode, prepare now).
+- [~] Keep I/O bitmap disabled or all-deny initially.
 
 Exit criteria:
 - Kernel runs using its own GDT (not bootloader table).
@@ -55,18 +55,18 @@ Exit criteria:
 Goal: avoid triple-faults and make failures diagnosable.
 
 ### 2.1 IDT structure and stubs
-- [ ] Build a full 256-entry IDT at a fixed kernel symbol/location.
-- [ ] Install default "unexpected vector" handler for all entries.
-- [ ] Install explicit handlers for at least:
+- [X] Build a full 256-entry IDT at a fixed kernel symbol/location.
+- [X] Install default "unexpected vector" handler for all entries.
+- [X] Install explicit handlers for at least:
 	- `#DE` (0)
 	- `#UD` (6)
 	- `#GP` (13)
 	- `#PF` (14)
-- [ ] Save register context in a consistent trap frame structure.
+- [X] Save register context in a consistent trap frame structure.
 
 ### 2.2 Fault reporting
-- [ ] For faults, print vector number + error code + `EIP/CS/EFLAGS`.
-- [ ] Halt cleanly after fatal faults.
+- [X] For faults, print vector number + error code + `EIP/CS/EFLAGS`.
+- [X] Halt cleanly after fatal faults.
 
 Exit criteria:
 - Triggering intentional divide-by-zero produces diagnostic output, not reboot/triple-fault.
