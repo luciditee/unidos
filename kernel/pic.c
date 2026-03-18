@@ -11,9 +11,6 @@
 #define ICW1_INIT  0x10   // Initialization sequence
 #define ICW4_8086  0x01   // 8086/88 mode
 
-#define PIC1_OFFSET 0x20  // IRQ0..7 -> INT 0x20..0x27
-#define PIC2_OFFSET 0x28  // IRQ8..15 -> INT 0x28..0x2F
-
 #define CASCADE_IRQ 2
 
 static uint16_t irq2port(uint8_t irq, uint8_t* bit) {

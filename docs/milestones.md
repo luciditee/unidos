@@ -78,18 +78,18 @@ Exit criteria:
 Goal: enable interrupts safely and prove IRQ servicing works.
 
 ### 3.1 PIC setup
-- [ ] Remap PIC vectors (typical: master `0x20`, slave `0x28`).
-- [ ] Mask all IRQ lines initially.
-- [ ] Implement correct EOI handling (slave first if IRQ >= 8, then master).
+- [X] Remap PIC vectors (typical: master `0x20`, slave `0x28`).
+- [X] Mask all IRQ lines initially.
+- [X] Implement correct EOI handling (slave first if IRQ >= 8, then master).
 
 ### 3.2 PIT setup
-- [ ] Program PIT channel 0 to desired scheduler tick (e.g. 100 Hz start point).
-- [ ] Route IRQ0 to timer handler and count ticks.
+- [X] Program PIT channel 0 to desired scheduler tick (e.g. 100 Hz start point).
+- [X] Route IRQ0 to timer handler and count ticks.
 
 ### 3.3 Keyboard IRQ setup
-- [ ] Unmask IRQ1 and install keyboard ISR.
-- [ ] Read scan code from port `0x60` and acknowledge controller/PIC correctly.
-- [ ] Demonstrate ISR by printing `K` at current cursor position.
+- [X] Unmask IRQ1 and install keyboard ISR.
+- [X] Read scan code from port `0x60` and acknowledge controller/PIC correctly.
+- [X] Demonstrate ISR by printing `K` at current cursor position.
 
 Exit criteria:
 - `sti` enabled without crash.

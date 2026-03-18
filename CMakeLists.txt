@@ -40,6 +40,8 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/isr.c  
   ${CMAKE_SOURCE_DIR}/kernel/pit.c
   ${CMAKE_SOURCE_DIR}/kernel/pic.c
+  ${CMAKE_SOURCE_DIR}/kernel/kb.c
+  ${CMAKE_SOURCE_DIR}/kernel/sched.c
 )
 
 set(KERNEL_INCLUDE_DIRS

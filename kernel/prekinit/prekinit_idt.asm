@@ -5,9 +5,10 @@ bits 32
 
 global idt_init
 global isr_common_entry
+extern sched_pending
+extern sched_do_switch
 
 extern isr_dispatch
-extern vgatext.puts
 
 section .text
 
@@ -70,6 +71,14 @@ isr_common_entry:
     push esp            ; push pointer to trap frame as argument
     call isr_dispatch   ; call isr_dispatch to handle interrupt in C
     add esp, 4          ; clean up argument
+
+    cmp byte [sched_pending], 0
+    je .no_switch
+    push esp                  ; old_esp (points at edi slot)
+    call sched_do_switch      ; eax = new task saved_esp
+    add esp, 4
+    mov esp, eax              ; commit context switch
+.no_switch:
 
     ; restore context
     popad               ; restore GP registers

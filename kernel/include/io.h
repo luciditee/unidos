@@ -37,6 +37,9 @@ static inline void io_wait(void) {
     outb(0x80, 0);
 }
 
+#define PIC1_OFFSET 0x20  // IRQ0..7 -> INT 0x20..0x27
+#define PIC2_OFFSET 0x28  // IRQ8..15 -> INT 0x28..0x2F
+
 void pic_mask_irq(uint8_t irq);
 void pic_unmask_irq(uint8_t irq);
 void pic_remap();

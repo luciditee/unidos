@@ -28,7 +28,7 @@
 
 global vgatext.get_cursor_eax
 global vgatext.puts
-global vgatext.puch
+global vgatext.putch
 global vgatext.set_cursor_linear
 global vgatext.set_cursor_enabled
 global vgatext.cls

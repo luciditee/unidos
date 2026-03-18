@@ -40,11 +40,14 @@ kdbg_puts:
     cprologue
     with_saved_esi_begin
     push edx        ; preserve EDX across puts call
+    pushfd
+    cli
 
     mov esi, [ebp + 8]       ; string
     mov edx, [ebp + 12]      ; attribute byte
     call vgatext.puts
 
+    popfd
     pop edx     ; restore EDX, ESI, EBP, return
     with_saved_esi_end
     cepilogue
