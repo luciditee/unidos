@@ -19,14 +19,7 @@ uint64_t get_ticks() {
 static void increment_ticks(trap_frame_t* tf) {
     (void)tf;
     ticks++;
-    /*if (ticks == next_report_tick) {
-        kdbg_puts("Tick: ", 0x0B);
-        kdbg_hex32((uint32_t)(ticks >> 32), 0x0B);
-        kdbg_hex32((uint32_t)(ticks & 0xFFFFFFFF), 0x0B);
-        kdbg_puts("\r\n", 0x0B);
-        next_report_tick += 10;
-    }*/
-    sched_pending = 1;
+    sched_on_tick();
     pic_send_eoi(0);
 }
 

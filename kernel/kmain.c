@@ -12,6 +12,7 @@ static void on_int3(trap_frame_t* tf) {
     kdbg_dump_current();
 }
 
+// Prints a 1 on the screen, then burns cycles.
 void test_task1() {
     while (1) {
         kdbg_puts("1", 0x0D);
@@ -19,11 +20,33 @@ void test_task1() {
     }
 }
 
+// Identical to above, but prints 2
 void test_task2() {
     while (1) {
         kdbg_puts("2", 0x0D);
         for (volatile int i = 0; i < 1000; i++);
     }
+}
+
+// Exits after printing a few times, to test task cleanup.
+void test_task3() {
+    for (volatile int i = 0; i < 5; i++){
+        kdbg_puts("3", 0x0D);
+        for (volatile int j = 0; j < 1000; j++);
+    }
+}
+
+// Exits immediately after printing a 4 to test exit code handling.
+void test_task4() {
+    kdbg_puts("4", 0x0D);
+    sched_task_exit(42);
+}
+
+// Prints a 5, sleeps for a while, then prints another 5 to test sleeping.
+void test_task5() {
+    kdbg_puts("5", 0x0D);
+    sched_task_sleep(200); // sleep for 100 ticks
+    kdbg_puts("5", 0x0D);
 }
 
 void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
@@ -35,10 +58,15 @@ void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     pit_init();
     kb_init();
     isr_register(3, on_int3);
+
     __asm__ __volatile__ ("sti");
 
     sched_add_task(test_task1);
     sched_add_task(test_task2);
+    //sched_add_task(test_task2); // test multiple instances
+    sched_add_task(test_task3);
+    sched_add_task(test_task4);
+    sched_add_task(test_task5);
 
     for (;;) {
         __asm__ __volatile__("hlt");

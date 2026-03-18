@@ -1,12 +1,15 @@
 
 #include "include/sched.h"
 #include "include/kmain.h"
+#include "include/pit.h"
 
 static task_t* current = NULL;
 static task_t* head = NULL;
 volatile uint8_t sched_pending = 0;
 
 static task_t list[MAX_THREADS] = {0};
+
+static void task_bootstrap(void);   // forward decl
 
 static task_t* alloc_slot(void) {
     for (size_t i = 0; i < MAX_THREADS; i++) {
@@ -18,7 +21,7 @@ static task_t* alloc_slot(void) {
 /*
  * Matches ISR restore order exactly.
  */
-static void build_initial_frame(task_t* t, void (*entry)(void)) {
+static void build_initial_frame(task_t* t, void (*start_eip)(void)) {
     uint32_t* sp = (uint32_t*)(t->stack + TASK_STACK_SIZE);
 
     #define PUSH(v) (*--sp = (uint32_t)(v))
@@ -27,10 +30,10 @@ static void build_initial_frame(task_t* t, void (*entry)(void)) {
     // and consequently, the exact layout of trap_frame_t.
     PUSH(0x00000202u);           // EFLAGS (IF=1)
     PUSH(GDT_SEL_KCODE);         // CS
-    PUSH((uint32_t)entry);       // EIP
-    PUSH(0);                     // error code (discarded)
-    PUSH(0);                     // vector (discarded)
-    PUSH(0);                     // cr2 (discarded)
+    PUSH((uint32_t)start_eip);   // EIP
+    PUSH(0);                     // error
+    PUSH(0);                     // vector
+    PUSH(0);                     // cr2
 
     PUSH(GDT_SEL_KDATA);         // gs
     PUSH(GDT_SEL_KDATA);         // fs
@@ -41,25 +44,76 @@ static void build_initial_frame(task_t* t, void (*entry)(void)) {
     PUSH(0); // ecx
     PUSH(0); // edx
     PUSH(0); // ebx
-    PUSH(0); // esp dummy for popad
+    PUSH(0); // esp dummy
     PUSH(0); // ebp
     PUSH(0); // esi
-    PUSH(0); // edi   <- restore starts here (popad)
+    PUSH(0); // edi
 
     #undef PUSH
-
     t->saved_esp = (uint32_t)sp;
 }
 
 void sched_init(void) {
     for (size_t i = 0; i < MAX_THREADS; i++) {
         list[i].in_use = TASK_UNUSED;
+        list[i].state = INVALID;
         list[i].next = NULL;
         list[i].saved_esp = 0;
+        list[i].wake_tick = 0;
+        list[i].return_code = 0;
     }
     head = NULL;
     current = NULL;
     sched_pending = 0;
+}
+
+static void sweep_dead(void) {
+    if (!head) return;
+
+    // Find tail for stable circular deletion (including head deletion).
+    task_t* tail = head;
+    while (tail->next != head) tail = tail->next;
+
+    task_t* prev = tail;
+    task_t* t = head;
+
+    do {
+        task_t* next = t->next;
+
+        if (t->state == DEAD) {
+            prev->next = next;
+
+            if (t == head) {
+                head = (next == t) ? NULL : next;
+            }
+            if (t == current) {
+                current = NULL;   // do not redirect to prev
+            }
+
+            t->next = NULL;
+            t->state = INVALID;
+            t->in_use = TASK_UNUSED;
+
+            if (!head) return;
+
+            t = next;
+            continue;
+        }
+
+        prev = t;
+        t = next;
+    } while (t != head);
+}
+
+static task_t* next_runnable(task_t* start) {
+    if (!head) return NULL;
+    task_t* t = start ? start : head;
+    task_t* begin = t;
+    do {
+        if (t->state == RUNNABLE) return t;
+        t = t->next;
+    } while (t && t != begin);
+    return NULL;
 }
 
 task_t* sched_add_task(void (*entry)(void)) {
@@ -67,8 +121,13 @@ task_t* sched_add_task(void (*entry)(void)) {
     if (!t) return NULL;
 
     t->in_use = TASK_IN_USE;
+    t->state = RUNNABLE;
+    t->wake_tick = 0;
+    t->return_code = 0;
+    t->entry = entry; // store real entry
     t->next = NULL;
-    build_initial_frame(t, entry);
+
+    build_initial_frame(t, task_bootstrap);  // start at trampoline
 
     if (!head) {
         head = t;
@@ -85,20 +144,66 @@ task_t* sched_add_task(void (*entry)(void)) {
 }
 
 uint32_t sched_do_switch(uint32_t old_esp) {
-    if (!head) {
-        sched_pending = 0;
-        return old_esp;
-    }
+    sched_pending = 0;
+
+    if (current)
+        current->saved_esp = old_esp;
+
+    sweep_dead();
+
+    if (!head) return old_esp;
 
     if (!current) {
-        current = head;          // first activation
-        sched_pending = 0;
-        return current->saved_esp;
+        current = next_runnable(head);
+        return current ? current->saved_esp : old_esp;
     }
 
-    kdbg_puts(" ", 0x00);
     current->saved_esp = old_esp;
-    current = current->next;     // circular invariant
-    sched_pending = 0;
-    return current->saved_esp;
+    current = next_runnable(current->next);
+    return current ? current->saved_esp : old_esp;
+}
+
+void sched_task_exit(int code) {
+    if (!current) return; // should not happen
+
+    current->return_code = code;
+    current->state = DEAD;
+
+    sched_task_yield();
+    for (;;) __asm__ __volatile__ ("hlt");
+}
+
+void sched_task_sleep(uint64_t ticks) {
+    if (!current) return; // should not happen
+
+    current->wake_tick = get_ticks() + ticks;
+    current->state = SLEEPING;
+
+    sched_task_yield();
+}
+
+void sched_task_yield() {
+    if (!current) return; // should not happen
+    
+    sched_pending = 1;
+    // __asm__ __volatile__("int $0x3B"); // TODO: dedicated software interrupt
+}
+
+void sched_on_tick(void) {
+    uint64_t now = get_ticks();
+    for (size_t i = 0; i < MAX_THREADS; i++) {
+        if (list[i].in_use == TASK_IN_USE &&
+            list[i].state == SLEEPING &&
+            now >= list[i].wake_tick) {
+            list[i].state = RUNNABLE;
+        }
+    }
+    sched_pending = 1;
+}
+
+static void task_bootstrap(void) {
+    void (*fn)(void) = (current ? current->entry : NULL);
+    if (fn) fn();
+    sched_task_exit(0);
+    for (;;) { __asm__ __volatile__("hlt"); }
 }
