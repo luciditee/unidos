@@ -44,9 +44,10 @@ void test_task4() {
 
 // Prints a 5, sleeps for a while, then prints another 5 to test sleeping.
 void test_task5() {
-    kdbg_puts("5", 0x0D);
-    sched_task_sleep(200); // sleep for 100 ticks
-    kdbg_puts("5", 0x0D);
+    for (;;) {
+        kdbg_puts("5", 0x0C);
+        sched_task_sleep(100); // sleep for 100 ticks
+    }
 }
 
 void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
@@ -57,6 +58,7 @@ void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     pic_remap();
     pit_init();
     kb_init();
+    sched_init();
     isr_register(3, on_int3);
 
     __asm__ __volatile__ ("sti");

@@ -5,6 +5,7 @@
 
 #define TASK_STACK_SIZE 4096
 #define MAX_THREADS 128
+#define STACK_CANARY 128
 
 #define TASK_IN_USE 1
 #define TASK_UNUSED 0
@@ -24,7 +25,8 @@ typedef struct task {
     uint32_t saved_esp;
     uint64_t wake_tick;
     int return_code;
-    struct task* next;
+    struct task* next;  // circular runqueue
+    struct task* sleep_next;  // sleep queue (sorted by wake_tick)
     void (*entry)(void);
     uint8_t stack[TASK_STACK_SIZE];
 } task_t;

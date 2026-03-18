@@ -5,7 +5,7 @@ set -eu
 : "${STAGE2_BIN:?STAGE2_BIN is required}"
 : "${KERNEL_BIN:?KERNEL_BIN is required}"
 : "${IMG_OUT:?IMG_OUT is required}"
-: "${STAGE2_RESERVED_SECTORS:=4}"
+: "${STAGE2_RESERVED_SECTORS:=6}"
 : "${KPARAMS_DEFAULT_SRC:=}"
 : "${NOKPARAMS:=OFF}"
 

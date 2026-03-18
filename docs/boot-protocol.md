@@ -124,6 +124,7 @@ At kernel entry (`0x00100000`), stage2 guarantees:
 - CPU mode: 32-bit protected mode
 - Paging: disabled (`CR0.PG = 0`)
 - A20: enabled
+- BOOTINFO: Metadata populated. E820 memory info stored at `BOOTINFO + (totalSize - 192)`.
 - Interrupt flag: cleared (`IF = 0`)
 - Direction flag: cleared (`DF = 0`)
 - Flat GDT active for handoff
@@ -158,6 +159,35 @@ Fields finalized dynamically by stage2:
 All other BOOTINFO fields are static protocol/media metadata emitted from stage2 header constants.
 
 Kernel code may treat `0x00000500` as the canonical BOOTINFO pointer on entry.
+
+### BIOS INT 15H / E820 information
+
+Data about available memory acquired from interrupt 0x15 is found in the E820 header block, which exists 192 bytes from the end of the `BOOTINFO` header. Assuming we think of the E820 block as offset 0, the following is the mapping of the E820 output buffer:
+
+- Offset 0: `uint16_t entry_size` - Size of one entry in the E820 buffer.
+- Offset 2: `uint16_t entry_count` - Number of entries in the E820 buffer.
+- Offset 4: `uint16_t total_length` - Total length of the buffer.
+- Offset 6 to `total_length`: `uint8_t* buffer`: E820 buffer (max 8 entries).
+
+Stage2 stores up to 8 descriptors. Excess entries beyond 8 descriptors are truncated.
+
+If E820 fails and no data is returned, the struct is instead populated as follows:
+
+- `entry_size = undefined`
+- `entry_count = 0`
+- `total_length_bytes=0`
+
+The stage2 flags' least significant bit is set to 0.
+
+If this happens, the kernel is responsible for ascertaining information about available memory (policy TBD).
+
+## Stage2 Flags (WIP)
+
+The Stage2 Flags field is a dword that exists at `stage2Flags` u32 field of `BOOTINFO`, and contains data about what happened during stage2's bootup.
+
+From least to most significant bit:
+
+- Bit 0 / `0x01` = `1` if E820 BIOS command returned memory data, `0` if it did not.
 
 ## Kernel parameters (`KPARAMS.DAT`) contract (v1.1)
 

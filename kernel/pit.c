@@ -7,7 +7,7 @@
 #define PIT_FREQ            1193182
 #define PIT_CHANNEL0        0x40
 #define PIT_CMD             0x43
-#define PIT_DESIRED_TICK_HZ 100
+#define PIT_DESIRED_TICK_HZ 1000
 
 static uint64_t ticks = 0;
 static uint64_t next_report_tick = 10;

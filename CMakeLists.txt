@@ -67,7 +67,7 @@ set(NASM_STAGE2_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/stage2/)
 # Boot layout defaults:
 # - LBA 0: stage1 boot sector
 # - LBA 1..N: raw stage2 loader stored in reserved FAT sectors
-set(STAGE2_RESERVED_SECTORS 5 CACHE STRING "Number of reserved sectors used to store raw stage2 after the boot sector")
+set(STAGE2_RESERVED_SECTORS 6 CACHE STRING "Number of reserved sectors used to store raw stage2 after the boot sector")
 option(NOKPARAMS "Skip injecting kernel/kparams.default.dat as KPARAMS.DAT into the floppy image" OFF)
 
 set(INJECT_DEFAULT_KPARAMS 1)

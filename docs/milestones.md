@@ -102,12 +102,12 @@ Exit criteria:
 
 Goal: prove preemption + ISR interaction with basic kernel tasks.
 
-- [ ] Create two kernel tasks/threads:
+- [X] Create two kernel tasks/threads:
 	- task A writes `1`, burns cycles
 	- task B writes `2`, burns cycles
-- [ ] Implement timer-driven round-robin switch between A and B.
-- [ ] Preserve/restore full software context (`EIP`, `ESP`, GPRs, `EFLAGS`; segment registers as needed).
-- [ ] Ensure IRQ1 keyboard handler can preempt and print `K` while tasks alternate.
+- [X] Implement timer-driven round-robin switch between A and B.
+- [X] Preserve/restore full software context (`EIP`, `ESP`, GPRs, `EFLAGS`; segment registers as needed).
+- [X] Ensure IRQ1 keyboard handler can preempt and print `K` while tasks alternate.
 
 Exit criteria:
 - On screen, mixed stream of `1`, `2`, and `K` appears without lockup or corruption.

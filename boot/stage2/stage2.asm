@@ -5,7 +5,7 @@ org 0x0000
 %include "constants.inc.asm"
 
 %ifndef STAGE2_RESERVED_SECTORS
-%define STAGE2_RESERVED_SECTORS 5
+%define STAGE2_RESERVED_SECTORS 6
 %endif
 
 %define TOTAL_RESERVED_SECTORS (1 + STAGE2_RESERVED_SECTORS)
@@ -94,6 +94,14 @@ header:
     kernelDestLinear    dd KERNEL_LOAD_LINEAR_ADDR
     kparamsLinearAddr   dd 0
     kparamsSizeBytes    dd 0
+
+    ; system metadata
+.e820:
+    e820EntrySize       dw 24
+    e820EntryCount      dw 0
+    e820Length          dw 0
+    e820Data            times (24 * 8) db 0
+    
 bootinfo_end:
 
 ; bootinfo constants
@@ -145,6 +153,61 @@ stage2:
     ; while keeping expanded memory limits cached in segment registers
 
     cli                 ; kill interrupts for now
+
+.get_e820:
+    pushad
+    push ds
+    push es
+
+    ; default: no E820 data available
+    and word [stage2Flags], 0xFFFE
+    mov word [e820EntryCount], 0
+    mov word [e820Length], 0
+
+    xor ebx, ebx                    ; continuation token for E820 (must start at 0)
+    mov di, e820Data                ; destination offset within CS/DS segment
+    mov bp, 8                       ; max entries that fit in bootinfo buffer
+
+.e820_next:
+    mov ax, cs
+    mov es, ax                      ; E820 writes to ES:DI
+    mov dword [es:di+20], 1         ; request valid extended attrs when ECX=24
+
+    mov eax, 0xE820
+    mov edx, 0x534D4150             ; 'SMAP'
+    mov ecx, 24                     ; request ACPI 3.0-sized descriptor
+    int 0x15
+    jc .e820_done                   ; unsupported or failed; keep any entries gathered so far
+
+    cmp eax, 0x534D4150
+    jne .e820_done
+
+    cmp cx, 20                      ; 20-byte legacy minimum
+    jb .e820_done
+
+    add di, 24
+    inc word [e820EntryCount]
+    add word [e820Length], 24
+
+    dec bp
+    jz .e820_done
+
+    test ebx, ebx                   ; EBX==0 means end of map
+    jnz .e820_next
+
+.e820_done:
+    cmp word [e820EntryCount], 0
+    je .e820_exit
+    or word [stage2Flags], 0x0001   ; bit0: E820 map present
+
+.e820_exit:
+    pop es
+    pop ds
+    popad
+
+    ; fallthrough to remainder of unreal mode setup
+
+    ; set up temporary gdt we'll need when temporarily entering pmode
     xor eax, eax        ; clear all of eax
     mov ax, cs          ; put the code segment in ax, so that we can...
     shl eax, 4          ; ...shift left (*16) to get the correct offset
@@ -902,11 +965,11 @@ initMsg                     db 'Stage2 finding kernel', 0
 foundMsg                    db 'done', 13, 10, 0
 kernelLoadStartMsg          db 'Loading', 0
 rootEndError                db 'unexpected end of root', 0
-kernelPrematureEOFError     db 'EOF reached!',13,10,'Expected more data based on file size', 0
-kernelCrcMismatchError      db 'checksum fail',13,10,'Kernel possibly corrupted',0
+kernelPrematureEOFError     db 'EOF reached!',13,10,'Expected more data', 0
+kernelCrcMismatchError      db 'crc32 fail',13,10,'Invalid kernel',0
 kernelCrcSkipMsg            db 'skipping crc32',0
 kernelCrcRuntime            dd 0
-a20Error                    db 13,10,'A 386+ CPU with A20 line support is required to run unidos', 0
+a20Error                    db 13,10,'A 386+ CPU with A20 line support is required', 0
 checkmark                   db 0xFB, 0
 dot                         db '.', 0
 kernelSizeBytes             dd 0
@@ -920,8 +983,8 @@ newline                     db 13, 10, 0
 errorMsg                    db 13, 10, 'error: ',0
 fallbackMsg                 db 'fallback', 13, 10, 0
 haltMsg                     db ', press any key to reset',0
-fdReadError                 db 'floppy read error',0
-fdResetError                db 'floppy reset error',0
+fdReadError                 db 'read error',0
+fdResetError                db 'reset error',0
 flpdx                       dw 0x0000
 flpax                       dw 0x0000
 flpretry                    db 0

@@ -33,6 +33,27 @@ static inline uint32_t inl(uint16_t port) {
     return ret;
 }
 
+static inline uint32_t irq_save_disable(void) {
+    uint32_t flags;
+    __asm__ __volatile__(
+        "pushf\n\t"
+        "pop %0\n\t"
+        "cli\n\t"
+        : "=r"(flags)
+        :
+        : "memory");
+    return flags;
+}
+
+static inline void irq_restore(uint32_t flags) {
+    __asm__ __volatile__(
+        "push %0\n\t"
+        "popf\n\t"
+        :
+        : "r"(flags)
+        : "memory", "cc");
+}
+
 static inline void io_wait(void) {
     outb(0x80, 0);
 }
