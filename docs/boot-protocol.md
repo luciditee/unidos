@@ -124,7 +124,7 @@ At kernel entry (`0x00100000`), stage2 guarantees:
 - CPU mode: 32-bit protected mode
 - Paging: disabled (`CR0.PG = 0`)
 - A20: enabled
-- BOOTINFO: Metadata populated. E820 memory info stored at `BOOTINFO + (totalSize - 192)`.
+- BOOTINFO: Metadata populated. E820/E801/AH88/CMOS memory stored/available to kernel. (E820 struct starts at `bootInfoSize - 198` and E820 data starts at `bootInfoSize - 192`)
 - Interrupt flag: cleared (`IF = 0`)
 - Direction flag: cleared (`DF = 0`)
 - Flat GDT active for handoff
@@ -183,11 +183,14 @@ If this happens, the kernel is responsible for ascertaining information about av
 
 ## Stage2 Flags (WIP)
 
-The Stage2 Flags field is a dword that exists at `stage2Flags` u32 field of `BOOTINFO`, and contains data about what happened during stage2's bootup.
+The Stage2 Flags field is a word/`u16` that exists at `stage2Flags` u32 field of `BOOTINFO`, and contains data about what happened during stage2's bootup.
 
 From least to most significant bit:
 
-- Bit 0 / `0x01` = `1` if E820 BIOS command returned memory data, `0` if it did not.
+- Bits 0 and 1 / `0x03` = `00` for *fallback*\* memory limit, `01` for `int 0x15,ax=E820` method, `10` for `int 0x15, ax=E801` method, or `11` for `int 0x15, ah=0x88` method.
+- Bit 2 / `0x04` = `1` if CRC32 kernel image verification was skipped by user, `0` if not.
+
+\* *Fallback* uses CMOS register indices `0x15`, `0x16`, `0x17`, `0x18`, `0x30`, `0x31` to determine memory size (up to 64MB) if all other methods fail. If the kernel detects no memory data populated into the `cmosMemorySize` field, it may use a safe synthetic limit such as 8MB, or halt the system/refuse to continue.
 
 ## Kernel parameters (`KPARAMS.DAT`) contract (v1.1)
 

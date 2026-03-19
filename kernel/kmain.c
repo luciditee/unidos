@@ -4,7 +4,9 @@
 #include "io.h"
 #include "pit.h"
 #include "kbm.h"
+#include "bootinfo.h"
 #include "include/sched.h"
+#include "kmem.h"
 
 static void on_int3(trap_frame_t* tf) {
     (void)tf;
@@ -55,20 +57,22 @@ void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     (void)kparam_length;
     kdbg_puts("Entering kmain\r\n", 0x0F);
 
+    bootinfo_init();
     pic_remap();
     pit_init();
+    mem_init();
     kb_init();
     sched_init();
     isr_register(3, on_int3);
 
     __asm__ __volatile__ ("sti");
 
-    sched_add_task(test_task1);
+    /*sched_add_task(test_task1);
     sched_add_task(test_task2);
     //sched_add_task(test_task2); // test multiple instances
     sched_add_task(test_task3);
     sched_add_task(test_task4);
-    sched_add_task(test_task5);
+    sched_add_task(test_task5);*/
 
     for (;;) {
         __asm__ __volatile__("hlt");

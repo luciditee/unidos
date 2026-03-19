@@ -7,6 +7,8 @@
 #define GDT_SEL_KCODE 0x08
 #define GDT_SEL_KDATA 0x10
 
+#define HALT_FOREVER for (;;) __asm__ __volatile__("hlt")
+
 typedef struct trap_tail {
     uint32_t    vector, // which vector the ISR entered on
                 error,  // error code
@@ -21,6 +23,15 @@ static inline void kmemcpy(void* dest, const void* src, size_t n) {
     for (size_t i = 0; i < n; i++) {
         d[i] = s[i];
     }
+}
+
+static inline int kmemcmp(const void* a, const void* b, size_t n) {
+    const uint8_t* p1 = (const uint8_t*)a;
+    const uint8_t* p2 = (const uint8_t*)b;
+    for (size_t i = 0; i < n; i++) {
+        if (p1[i] != p2[i]) return 1;
+    }
+    return 0;
 }
 
 void kdbg_dump_current(void);

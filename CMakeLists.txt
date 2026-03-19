@@ -42,6 +42,8 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/pic.c
   ${CMAKE_SOURCE_DIR}/kernel/kb.c
   ${CMAKE_SOURCE_DIR}/kernel/sched.c
+  ${CMAKE_SOURCE_DIR}/kernel/bootinfo.c
+  ${CMAKE_SOURCE_DIR}/kernel/kmem.c
 )
 
 set(KERNEL_INCLUDE_DIRS
@@ -153,6 +155,7 @@ foreach(KERNEL_C_SOURCE IN LISTS KERNEL_C_SOURCES)
             -Wextra
             ${KERNEL_C_INCLUDE_FLAGS}
             -DUNIDOS_VERSION=${UNIDOS_VERSION}
+            -DSTAGE2_RESERVED_SECTORS=${STAGE2_RESERVED_SECTORS}
             -MMD
             -MF ${KERNEL_C_DEPFILE}
             -c ${KERNEL_C_SOURCE}

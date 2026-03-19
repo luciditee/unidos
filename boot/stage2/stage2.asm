@@ -92,10 +92,17 @@ header:
     ; kernel load metadata
     stage2EntryCS       dw STAGE2_LOAD_SEGMENT
     kernelDestLinear    dd KERNEL_LOAD_LINEAR_ADDR
+    kernelSizeBytes     dd 0
     kparamsLinearAddr   dd 0
     kparamsSizeBytes    dd 0
 
-    ; system metadata
+    ; system memory metadata
+.e801:
+    e801MemorySize      dd 0
+.ah88Mem:
+    ah88MemorySize      dd 0
+.cmosMem:
+    cmosMemorySize      dd 0
 .e820:
     e820EntrySize       dw 24
     e820EntryCount      dw 0
@@ -155,13 +162,13 @@ stage2:
     cli                 ; kill interrupts for now
 
 .get_e820:
-    pushad
-    push ds
+    pushad              ; push all GP registers
+    push ds             ; push DS/ES
     push es
 
     ; default: no E820 data available
-    and word [stage2Flags], 0xFFFE
-    mov word [e820EntryCount], 0
+    and word [stage2Flags], 0xFFFC  ; by default, we want the lower 2 bits to be 0
+    mov word [e820EntryCount], 0    ; init entry count and length to 0
     mov word [e820Length], 0
 
     xor ebx, ebx                    ; continuation token for E820 (must start at 0)
@@ -169,44 +176,191 @@ stage2:
     mov bp, 8                       ; max entries that fit in bootinfo buffer
 
 .e820_next:
-    mov ax, cs
+    mov ax, cs                      ; CS for ES:DI
     mov es, ax                      ; E820 writes to ES:DI
     mov dword [es:di+20], 1         ; request valid extended attrs when ECX=24
 
-    mov eax, 0xE820
-    mov edx, 0x534D4150             ; 'SMAP'
+    mov eax, 0xE820                 ; load command
+    mov edx, 0x534D4150             ; 'SMAP' constant--required for E820 command
     mov ecx, 24                     ; request ACPI 3.0-sized descriptor
-    int 0x15
+    int 0x15                        ; call bios
     jc .e820_done                   ; unsupported or failed; keep any entries gathered so far
 
-    cmp eax, 0x534D4150
+    cmp eax, 0x534D4150             ; if EDX returns 'SMAP' we are done
     jne .e820_done
 
     cmp cx, 20                      ; 20-byte legacy minimum
-    jb .e820_done
+    jb .e820_done                   
 
     add di, 24
-    inc word [e820EntryCount]
-    add word [e820Length], 24
+    inc word [e820EntryCount]       ; increment count for each entry
+    add word [e820Length], 24       ; keep track of total length by adding size of each
 
-    dec bp
-    jz .e820_done
+    dec bp                          ; move base pointer until 0
+    jz .e820_done                   ; if 0, we're done
 
     test ebx, ebx                   ; EBX==0 means end of map
     jnz .e820_next
 
 .e820_done:
-    cmp word [e820EntryCount], 0
-    je .e820_exit
-    or word [stage2Flags], 0x0001   ; bit0: E820 map present
+    cmp word [e820EntryCount], 0    ; if we got no entries, we don't have e820 data
+    je .e820_exit                   ; skip if so
+    or word [stage2Flags], 0x0001   ; otherwise, lowest 2 bits: 01: E820 map present
 
 .e820_exit:
-    pop es
+    pop es          ; restore regs
     pop ds
     popad
 
-    ; fallthrough to remainder of unreal mode setup
+    mov ax, [stage2Flags]   ; check if we got E820 data for skipping next phases
+    test ax, 0x0001 ; did we get E820 data?
+    jnz .resumeEnterUnreal ; if so, we can skip E801/AH88 methods
 
+.e801_entry:
+    pushfd
+    pushad
+
+    xor eax, eax        ; clear eax and ebx so the higher word is zeroed
+    xor ebx, ebx
+
+    mov ax, 0xE801      ; set e801 command
+    int 0x15            ; call BIOS
+    jc .e801_exit       ; if carry flag set, command failed
+
+    add ax, 0x400       ; ax will contain the quantity of memory up to 16MB 
+                        ; but disregards the first 1MB, so we add 1MB back.
+                        ; we're limited to 16MB with this method, so we need
+                        ; to check the 64k block math as well
+    shl ebx, 6          ; bx contains memoryabove 16MB in 64k blocks, so we * 64
+                        ; to get memory in kilobytes (done as dword so we can
+                        ; safely overflow out of bx)
+    add eax, ebx        ; add the two values together to get total memory in KB
+    test eax, eax       ; did we get a zero? some BIOSes report with CX/DX instead
+                        ; so we repeat the above process with CX/DX if so
+    jnz .e801_save      ; otherwise, go ahead and save the value
+                        ; fallthrough to CX/DX case
+
+    xor eax, eax        ; clear EAX/EBX for CX/DX case
+    xor ebx, ebx
+    mov ax, cx          ; copy CX/DX to AX/BX to make this method workable
+    mov bx, dx          
+    add ax, 0x400       ; offset by 1MB since we only got memory above 1MB with int15h
+    shl ebx, 6          ; convert 64k blocks to KB in EBX for the same reason as above
+    add eax, ebx        ; add together for total KB
+
+    test eax, eax       ; check for 0 value
+    jz .e801_exit       ; if we still got zero, we failed to get memory info with this method, so exit
+.e801_save:
+    mov [e801MemorySize], eax   
+    mov ax, [stage2Flags]       ; set flag
+    or ax, 0x0002               ; 10: E801 data present
+    mov [stage2Flags], ax
+    
+.e801_exit:
+    popad
+    popfd
+    
+    mov ax, [stage2Flags]
+    test ax, 0x0003     ; have we found memory info from either E820 or E801?
+    jnz .resumeEnterUnreal ; if so, we can skip the AH=0x88 method
+
+.ah88_entry:
+    pushad
+    pushfd
+
+    xor eax, eax
+    mov ah, 0x88
+    int 0x15
+    jc .ah88_exit
+    movzx eax, ax        ; ax contains memory in KB, but we want to store as dword, 
+                         ; so zero-extend into eax
+    add eax, 0x400       ; like E801, this returns memory above 1MB in KB, 
+                         ; but disregards the first 1MB, so we add it back
+    mov [ah88MemorySize], eax
+    mov ax, [stage2Flags]    
+    or ax, 0x0003      ; 11: memory info present from ah88
+    mov [stage2Flags], ax
+.ah88_exit:
+    popfd
+    popad
+
+    mov ax, [stage2Flags]
+    test ax, 0x0003     ; check if we got memory info from E820 or E801 methods
+    jnz .resumeEnterUnreal ; if we got any memory info from the above methods, we can skip synthetic method and proceed with unreal mode setup
+                        ; fallthrough to CMOS method if not found
+.cmosMemoryTest:
+    ; As a last resort, we try to get memory info from the CMOS, which is extremely 
+    ; unreliable and often under-reports available memory, but it's better than nothing
+    ; on really old systems that don't support the above methods. We won't set any 
+    ; flags for this method since it's not really a "bootinfo method" per se, just a 
+    ; last-ditch effort to get some kind of memory info before giving up and using 
+    ; synthetic defaults.
+    push dx
+    xor eax, eax
+
+    %if 0
+    ; Can be used as a sanity check, but is not necessary
+    mov al, 0x15        ; CMOS base memory size low bytes
+    out 0x70, al
+    in al, 0x71
+    mov dl, al
+
+    mov al, 0x16        ; CMOS base memory size high bytes
+    out 0x70, al
+    in al, 0x71
+    mov dh, al
+    %else
+    ; Otherwise, we can just skip the base memory size check
+    ; and instead assume a default of 1024K for conventional/BIOS
+    ; memory
+    mov dx, 0x400       ; assume base memory is 640K + 384K for BIOS
+    %endif
+
+    push dx             ; dx now hold base memory size, push it
+
+    mov al, 0x17        ; CMOS extended memory size low bytes
+    out 0x70, al
+    in al, 0x71
+    mov dl, al 
+
+    mov al, 0x18        ; CMOS extended memory size high bytes
+    out 0x70, al
+    in al, 0x71
+    mov dh, al
+
+    pop ax              ; restore old DX value into AX
+    add ax, dx          ; add base and extended memory together for total memory in KB
+
+    cmp dx, 0           ; however, there's a chance we didn't get any extended info, so we
+                        ; try the alternate port
+    jnz .cmos_done       ; if we got some value in dx, we can skip the alternate port method
+    
+    mov al, 0x30        ; alt port for extended memory size low byte
+    out 0x70, al
+    in al, 0x71
+    mov dl, al
+    mov al, 0x31        ; alt port for extended memory size high byte
+    out 0x70, al
+    in al, 0x71
+    mov dh, al
+    add ax, dx          ; add alternate extended memory to base memory in ax for total memory in KB
+.cmos_done:
+    mov [cmosMemorySize], ax ; store CMOS memory size in bootinfo for potential use by kernel
+    pop dx
+
+%if 0   ; uncomment to prevent systems without E820/E801/AH88 memory info from proceeding
+        ; (otherwise, kernel will use synthetic memory info determined after stage2)
+    mov ax, [stage2Flags]
+    test ax, 0x0003     ; did any memory method succeed in getting us memory info?
+    jnz .resumeEnterUnreal  ; if so, proceed with the rest of unreal mode setup
+    mov si, memError        ; otherwise, print error
+    call .print
+    mov si, haltMsg
+    call .print
+    jmp .wait_key_reset
+%endif
+
+.resumeEnterUnreal:
     ; set up temporary gdt we'll need when temporarily entering pmode
     xor eax, eax        ; clear all of eax
     mov ax, cs          ; put the code segment in ax, so that we can...
@@ -347,7 +501,7 @@ stage2:
     ret
 
 .parse_kernel: ; == KERNEL PARSING ENTRYPOINT ==
-    mov dword [kernelDestLinear], KERNEL_LOAD_LINEAR_ADDR ; initialize kernelDestLinear
+    mov dword [kernelLoadCursor], KERNEL_LOAD_LINEAR_ADDR ; initialize kernelLoadCursor
     mov dword [kernelCrcRuntime], 0xFFFFFFFF    ; crc32 initial value is always uint32_max
                         ; fallthrough to kernel image reading loop 
 .kernel_loop:
@@ -466,7 +620,7 @@ stage2:
     mov ax, BOUNCE_BUFFER_SEG
     mov es, ax
     xor si, si              ; start of bounce buffer
-    mov edi, [kernelDestLinear]
+    mov edi, [kernelLoadCursor]
     cld
 .copy_loop:
     mov al, [es:si]         ; load byte from bounce buffer
@@ -493,7 +647,7 @@ stage2:
                             ; of bytes, or just the bytes remaining in the file.
 
     movzx eax, si                   ; si contains the number of bytes we just copied
-    add [kernelDestLinear], eax     ; update kernelDestLinear with that number
+    add [kernelLoadCursor], eax     ; update kernelLoadCursor with that number
     sub [kernelRemainingBytes], si  ; remaining -= copied
     sbb word [kernelRemainingBytes+2], 0 ; handle borrow for high word
 
@@ -524,7 +678,11 @@ stage2:
 .crc32_skipped:
     mov si, kernelCrcSkipMsg            ; if here, user chose to skip crc32 check, so indicate that
     call .print
-    ret
+    push eax
+    mov ax, [stage2Flags]
+    or ax, 0x0004 ; set bit2 to indicate we skipped crc32 check
+    mov [stage2Flags], ax
+    pop eax
 .crc32_ok:
     ret
 
@@ -972,7 +1130,7 @@ kernelCrcRuntime            dd 0
 a20Error                    db 13,10,'A 386+ CPU with A20 line support is required', 0
 checkmark                   db 0xFB, 0
 dot                         db '.', 0
-kernelSizeBytes             dd 0
+kernelLoadCursor            dd 0
 kernelStartCluster          dd 0
 kernelCurCluster            dd 0
 kernelRemainingBytes        dd 0

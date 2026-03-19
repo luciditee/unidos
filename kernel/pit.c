@@ -10,7 +10,6 @@
 #define PIT_DESIRED_TICK_HZ 1000
 
 static uint64_t ticks = 0;
-static uint64_t next_report_tick = 10;
 
 uint64_t get_ticks() {
     return ticks;

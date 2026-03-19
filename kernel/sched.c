@@ -9,7 +9,6 @@
 #define U64_MAX 0xFFFFFFFFFFFFFFFFULL
 
 static uint32_t rr_ticks_left = RR_SCHEDULER_CADENCE;
-static uint64_t next_wake_tick = U64_MAX;
 static task_t* current = NULL;
 static task_t* head = NULL;
 static task_t* sleep_head = NULL;
