@@ -18,6 +18,18 @@ typedef enum {
     PMM_PAGE_ADDRESS_UNALIGNED = 4
 } pmm_free_result_t;
 
+typedef enum {
+    PMM_ALLOC_SUCCESS = 0,
+    PMM_ALLOC_OOM = 1,
+    PMM_NO_PAGES_INITIALIZED = 2
+} pmm_alloc_result_t;
+
+typedef enum {
+    PMM_RESERVE_SUCCESS = 0,
+    PMM_NO_MORE_REGION_SLOTS = 1,
+    PMM_INVALID_REGION_LENGTH = 2
+} pmm_reserve_result_t;
+
 typedef struct {
     uint32_t base;
     uint32_t length;

@@ -47,7 +47,7 @@ void mem_init(void) {
     // but this is simpler than trying to carve out usable regions
     // REQUIRED if we want to keep programs from allocating memory
     // below 1MB
-    ADD_REGION(0, 0x10000, MEM_RESERVED);
+    ADD_REGION(0, 0x100000, MEM_RESERVED);
 
     // Stage2 boot region
     // TODO: Should change 512 to build env macro
@@ -72,8 +72,29 @@ void mem_init(void) {
     if (g_memory_method == USE_E820) {
         for (size_t i = 0; i < g_e820_desc_count; i++) {
             volatile const e820_desc_t* d = &g_e820_descs[i];
-            if (d->type != 1)
-                ADD_REGION((uint32_t)d->base, (uint32_t)d->length, MEM_RESERVED);
+            if (d->type != 1) {
+                uint64_t base64 = d->base;
+                uint64_t len64 = d->length;
+                if (len64 == 0) continue;
+                if (base64 >= 0x100000000ULL) continue; // outside 32-bit phys space
+
+                uint64_t end64 = base64 + len64;
+                if (end64 < base64 || end64 > 0x100000000ULL) {
+                    end64 = 0x100000000ULL; // clamp overflow or >4GiB to 4GiB ceiling
+                }
+
+                uint32_t base32 = (uint32_t)base64;
+                uint32_t len32 = (uint32_t)(end64 - base64);
+                if (len32 == 0) continue;
+                
+                if (n >= MEM_REGIONS_MAX) {
+                    kdbg_puts("fatal: e820 memory map has more reserved regions than MEM_REGIONS_MAX\r\n", 0x0C);
+                    HALT_FOREVER;
+                    break;
+                }
+
+                ADD_REGION(base32, len32, MEM_RESERVED);
+            }
         }
     }
 
@@ -168,15 +189,40 @@ void pmm_init(mem_region_t* regions, size_t region_count) {
     bm_set_range_touched(loc, pagebitmap_size_bytes);
 }
 
-uint32_t pmm_alloc_frame(void) {
-    if (frame_count == 0) return 0; // no memory available
+bool pmm_is_region_reserved(uint32_t address, uint32_t length) {
+    if (length == 0) return false; // we need nonzero length
+
+    for(size_t i = 0; i < mem_region_count; i++) {
+        volatile mem_region_t* r = &mem_regions[i];
+        if (r->length == 0) continue; // skip zero-length regions
+        uint64_t region_end = (uint64_t)r->base + (uint64_t)r->length;
+        uint64_t span_end = (uint64_t)address + (uint64_t)length;
+
+        // Check for ANY overlap between region and span
+        //bool startOverlap = ((uint64_t)address >= (uint64_t)r->base) && ((uint64_t)address < region_end);
+        //bool endOverlap = ((uint64_t)span_end > (uint64_t)r->base) && ((uint64_t)span_end <= region_end);
+        //bool coversRegion = length != 0 && ((uint64_t)address <= (uint64_t)r->base) && ((uint64_t)span_end >= region_end);
+        bool simplifiedOverlap = ((uint64_t)address < region_end) && ((uint64_t)r->base < (uint64_t)span_end);
+        if (r->type == MEM_RESERVED && simplifiedOverlap)
+            return true;
+    }
+    return false;
+}
+
+uint32_t pmm_alloc_frame(pmm_alloc_result_t* out_result) {
+    if (frame_count == 0) {
+        if (out_result) *out_result = PMM_NO_PAGES_INITIALIZED;
+        return 0;
+    }
 
     // Circular loop through bitmap starting at hint
     for (uint32_t f = frame_hint, counted = 0; counted < frame_count; f = ((f+1 >= frame_count) ? 0 : f+1), counted++) {
-        // Short-circuit if byte is all 0s (all frames free)
+        // If the current frame byte is 0, we know it's completely free and can
+        // immediately set the current frame bit without further masking
         if (pagebitmap[f >> 3] == 0) {
             bm_set(f);
             frame_hint = (f + 1) % frame_count;
+            if (out_result) *out_result = PMM_ALLOC_SUCCESS;
             return f << 12; // convert page frame number to physical frame address
         }
 
@@ -185,21 +231,30 @@ uint32_t pmm_alloc_frame(void) {
          if ((pagebitmap[f >> 3] & mask) == 0) {
              bm_set(f);
              frame_hint = (f + 1) % frame_count;
+             if (out_result) *out_result = PMM_ALLOC_SUCCESS;
              return f << 12; // convert page frame number to physical frame address
          }
     }
 
+    if (out_result) *out_result = PMM_ALLOC_OOM;
     return 0; // no free frame found
 }
 
 pmm_free_result_t pmm_free_frame(uint32_t address) {
-    if (address % 4096 != 0) return PMM_PAGE_ADDRESS_UNALIGNED;
-    // TODO: disallow freeing of reserved frames
+    // we only accept page-frame aligned addresses
+    if (address % 4096 != 0) 
+        return PMM_PAGE_ADDRESS_UNALIGNED;
 
-    uint32_t f = address >> 12; // convert linear address to page frame number
+    // check that we aren't freeing an address outside our bitmap's bounds
+    uint32_t f = address >> 12; // phys address to page frame number
     if (f >= frame_count) return PMM_PAGE_OUTOFBOUNDS;
-    uint8_t mask = 1u << (f & 7);
 
+    // check that the page isn't reserved by an explicitly reserved region
+    if (pmm_is_region_reserved(address, 4096))
+        return PMM_PAGE_RESERVED;
+
+    // otherwise, attempt to free the page (or report it as already free)
+    uint8_t mask = 1u << (f & 7);
     if (pagebitmap[f >> 3] & mask) {
         bm_clear(f);
         return PMM_PAGE_FREED;
@@ -208,10 +263,14 @@ pmm_free_result_t pmm_free_frame(uint32_t address) {
     }
 }   
 
-void pmm_reserve_range(uint32_t base, uint32_t length) {
+pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length) {
+    // ensure we have room to track regions
     if (mem_region_count >= MEM_REGIONS_MAX) 
-        return; // no more room to track regions
-                // TODO: probably needs an error code of some sort
+        return PMM_NO_MORE_REGION_SLOTS;
+    
+    // ensure we treat zero-length ranges as invalid and don't add them
+    if (length == 0)
+        return PMM_INVALID_REGION_LENGTH;
 
     size_t idx = mem_region_count;
     mem_regions[idx].base = base;
@@ -220,4 +279,5 @@ void pmm_reserve_range(uint32_t base, uint32_t length) {
     mem_region_count = idx + 1;
 
     pmm_init_single((mem_region_t*)&mem_regions[idx]);
+    return PMM_RESERVE_SUCCESS;
 }

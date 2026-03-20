@@ -17,8 +17,8 @@ volatile size_t g_kernel_size_bytes = 0;
 volatile size_t g_kparams_phys_address = 0;
 volatile size_t g_kparams_size_bytes = 0;
 
-static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out, volatile e820_desc_t* descOut, volatile uint8_t* descOutMax) {
-    if (!e || !out) return false;
+static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out, volatile e820_desc_t* descOut, uint8_t descOutCapacity, uint8_t* descOutCount) {
+    if (!e || !out || !descOutCount) return false;
     if (e->entrySize < 20) return false;
     if (e->entryCount == 0) return false;
     if (e->totalLength > sizeof(e->data)) return false;
@@ -32,24 +32,29 @@ static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out, volatile e8
 
     const uint8_t* p = e->data;
     for (uint16_t i = 0; i < e->entryCount; i++) {
-        const e820_desc_t* d = (const e820_desc_t*)p;
+        e820_desc_t d = {0};
+        size_t copyBytes = (e->entrySize < sizeof(e820_desc_t)) ? e->entrySize : sizeof(e820_desc_t);
+        kmemcpy(&d, p, copyBytes);
 
-        if (d->length != 0 && d->type == 1) {
-            uint64_t end = d->base + d->length;
-            if (end < d->base) end = UINT64_MAX; // overflow clamp
+        if (d.length != 0 && d.type == 1) {
+            uint64_t end = d.base + d.length;
+            if (end < d.base) end = UINT64_MAX; // overflow clamp
 
-            usableBytes += d->length;
+            usableBytes += d.length;
             if (end > topBytes) topBytes = end;
         }
 
-        if (descsFilled < *descOutMax) {
-            kmemcpy(&descOut[descsFilled], d, sizeof(e820_desc_t));
+        if (descOut && descsFilled < descOutCapacity) {
+            descOut[descsFilled].base = d.base;
+            descOut[descsFilled].length = d.length;
+            descOut[descsFilled].type = d.type;
+            descOut[descsFilled].attrs = d.attrs;
             descsFilled++;
         }
         p += e->entrySize;
     }
 
-    *descOutMax = descsFilled;
+    *descOutCount = descsFilled;
     out->usableKiB = (uint32_t)(usableBytes >> 10);
     out->topKiB    = (uint32_t)(topBytes >> 10);
     return true;
@@ -107,10 +112,12 @@ void bootinfo_getmem(void) {
         case USE_E820:
             kdbg_puts("Using E820 memory map\r\n", 0x0B);
             e820_stats_t e820_stats = {0};
-            if (!decode_e820(&bi->e820, &e820_stats, g_e820_descs, &g_e820_desc_count)) {
+            uint8_t decoded_desc_count = 0;
+            if (!decode_e820(&bi->e820, &e820_stats, g_e820_descs, E820_DESC_MAX, &decoded_desc_count)) {
                 kdbg_puts("Invalid E820 data\r\n", 0x0C);
                 HALT_FOREVER;
             }
+            g_e820_desc_count = decoded_desc_count;
             g_avail_memory_kib = e820_stats.topKiB;
             g_memory_method = USE_E820;
             break;
