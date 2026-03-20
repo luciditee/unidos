@@ -3,28 +3,21 @@
 #include "kmain.h"
 #include <stdbool.h>
 
-typedef struct __attribute__((packed)) {
-    uint64_t base;
-    uint64_t length;
-    uint32_t type;      // 1 = usable
-    uint32_t attrs;     // present if entrySize >= 24
-} e820_desc_t;
 
-typedef struct {
-    uint32_t usableKiB;
-    uint32_t topKiB;
-} e820_stats_t;
 
 static bootinfo_t* bi = (bootinfo_t*)BOOTINFO_LINEAR_ADDR;
 
 volatile uint32_t g_avail_memory_kib = 0;
+volatile bootinfo_memory_method_t g_memory_method = 0;
+volatile e820_desc_t g_e820_descs[E820_DESC_MAX] = {0};
+volatile uint8_t g_e820_desc_count = 0;
 volatile bool g_bootinfo_validated = false;
 volatile size_t g_kernel_phys_address = 0;
 volatile size_t g_kernel_size_bytes = 0;
 volatile size_t g_kparams_phys_address = 0;
 volatile size_t g_kparams_size_bytes = 0;
 
-static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out) {
+static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out, volatile e820_desc_t* descOut, volatile uint8_t* descOutMax) {
     if (!e || !out) return false;
     if (e->entrySize < 20) return false;
     if (e->entryCount == 0) return false;
@@ -35,6 +28,7 @@ static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out) {
 
     uint64_t usableBytes = 0;
     uint64_t topBytes = 0;
+    uint8_t descsFilled = 0;
 
     const uint8_t* p = e->data;
     for (uint16_t i = 0; i < e->entryCount; i++) {
@@ -48,9 +42,14 @@ static bool decode_e820(const bootinfo_e820_t* e, e820_stats_t* out) {
             if (end > topBytes) topBytes = end;
         }
 
+        if (descsFilled < *descOutMax) {
+            kmemcpy(&descOut[descsFilled], d, sizeof(e820_desc_t));
+            descsFilled++;
+        }
         p += e->entrySize;
     }
 
+    *descOutMax = descsFilled;
     out->usableKiB = (uint32_t)(usableBytes >> 10);
     out->topKiB    = (uint32_t)(topBytes >> 10);
     return true;
@@ -74,7 +73,7 @@ void bootinfo_init(void) {
     kdbg_hex32(g_kparams_size_bytes, 0x0A);
     kdbg_puts("\r\n", 0x0A);
 
-    //g_bootinfo_validated = true;
+    g_bootinfo_validated = true;
 }
 
 void bootinfo_validate_prefix(void) {
@@ -94,6 +93,7 @@ void bootinfo_getmem(void) {
         case USE_CMOS:
             kdbg_puts("Using CMOS memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->cmosMemorySize;
+            g_memory_method = USE_CMOS;
             if (g_avail_memory_kib <= 0x400) {
                 kdbg_puts("CMOS reports strangely low value (got ", 0x0C);
                 kdbg_hex32(g_avail_memory_kib, 0x0C);
@@ -103,26 +103,29 @@ void bootinfo_getmem(void) {
                 g_avail_memory_kib = SYNTHETIC_MEM_FALLBACK;
                 break;
             }
-
             break;
         case USE_E820:
             kdbg_puts("Using E820 memory map\r\n", 0x0B);
-            e820_stats_t e;
-            if (!decode_e820(&bi->e820, &e)) {
+            e820_stats_t e820_stats = {0};
+            if (!decode_e820(&bi->e820, &e820_stats, g_e820_descs, &g_e820_desc_count)) {
                 kdbg_puts("Invalid E820 data\r\n", 0x0C);
                 HALT_FOREVER;
             }
-            g_avail_memory_kib = e.topKiB;
+            g_avail_memory_kib = e820_stats.topKiB;
+            g_memory_method = USE_E820;
             break;
         case USE_E801:
             kdbg_puts("Using E801 memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->e801MemorySize;
+            g_memory_method = USE_E801;
             break;
         case USE_AH88:
             kdbg_puts("Using AH88 memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->ah88MemorySize;
+            g_memory_method = USE_AH88;
             break;
         default:
+            // Should never happen, but kept here for sanity
             kdbg_puts("Unknown memory map method\r\n", 0x0C);
             HALT_FOREVER;
     }

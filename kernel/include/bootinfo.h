@@ -9,13 +9,26 @@
 #define MAGIC_4CHAR "BTP1" // TODO: sync with stage2 assembly
 #define BOOTINFO_SIZE_EXPECTED 289
 #define SYNTHETIC_MEM_FALLBACK 8192u
+#define E820_DESC_MAX 8
 
 typedef struct __attribute__((packed)) {
     uint16_t entrySize;
     uint16_t entryCount;
     uint16_t totalLength;
-    uint8_t data[24 * 8]; // TODO: union this with a struct representing what we expect to find here maybe
+    uint8_t data[24 * E820_DESC_MAX]; // TODO: union this with a struct representing what we expect to find here maybe
 } bootinfo_e820_t;
+
+typedef struct __attribute__((packed)) {
+    uint64_t base;
+    uint64_t length;
+    uint32_t type;      // 1 = usable
+    uint32_t attrs;     // present if entrySize >= 24
+} e820_desc_t;
+
+typedef struct {
+    uint32_t usableKiB;
+    uint32_t topKiB;
+} e820_stats_t;
 
 typedef struct __attribute__((packed)) {
     // First 3 fields are used to validate presence of header
@@ -86,6 +99,9 @@ _Static_assert(sizeof(bootinfo_t) == BOOTINFO_SIZE_EXPECTED, "bootinfo_t size mi
 
 extern volatile bool g_bootinfo_validated;
 extern volatile uint32_t g_avail_memory_kib;
+extern volatile bootinfo_memory_method_t g_memory_method;
+extern volatile e820_desc_t g_e820_descs[E820_DESC_MAX];
+extern volatile uint8_t g_e820_desc_count;
 extern volatile size_t g_kernel_phys_address;
 extern volatile size_t g_kernel_size_bytes;
 extern volatile size_t g_kparams_phys_address;
