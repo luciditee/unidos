@@ -69,14 +69,14 @@ void bootinfo_init(void) {
     bootinfo_getmem();
     bootinfo_getkmetadata();
 
-    kdbg_hex32(g_kernel_phys_address, 0x0A);
+    /*kdbg_hex32(g_kernel_phys_address, 0x0A);
     kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kernel_size_bytes, 0x0A);
     kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kparams_phys_address, 0x0A);
     kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kparams_size_bytes, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    kdbg_puts("\r\n", 0x0A);*/
 
     g_bootinfo_validated = true;
 }

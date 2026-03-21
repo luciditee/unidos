@@ -119,15 +119,25 @@ Exit criteria:
 Goal: move from flat physical assumptions to managed virtual memory.
 
 ### 5.1 Physical memory discovery/allocation
-- [ ] Establish memory map strategy (BIOS E820 preferred, fallback rules documented).
-- [ ] Implement page-frame allocator (bitmap or free-list, 4KiB pages).
-- [ ] Reserve kernel image, boot structures, and device memory regions.
+- [X] Establish memory map strategy (BIOS E820 preferred, fallback rules documented).
+- [X] Implement page-frame allocator (bitmap or free-list, 4KiB pages).
+- [X] Reserve kernel image, boot structures, and device memory regions.
 
 ### 5.2 Paging enablement
-- [ ] Build page directory/page tables for kernel mappings.
-- [ ] Keep an initial identity mapping window for bring-up simplicity.
-- [ ] Enable paging (`CR0.PG=1`) and verify execution continuity.
-- [ ] Add robust `#PF` handler diagnostics (fault addr from `CR2`, error code decode).
+- [X] Build page directory/page tables for kernel mappings.
+- [X] Keep an initial identity mapping window for bring-up simplicity.
+- [X] Enable paging (`CR0.PG=1`) and verify execution continuity.
+- [X] Add robust `#PF` handler diagnostics (fault addr from `CR2`, error code decode).
+
+### 5.3 Post-bootstrap paging/runtime gates
+Note: These items may be implemented in parallel with milestone 6. They are not required to declare Milestone 5.2 complete, but are required for stable kernel/user bringup in Milestone 6.
+
+- [~] `#PF` handler prints [X] CR2, [X] raw error code, [X] P/W/U, and [ ] EIP/CS.
+- [ ] Paging API exists and works: `map`, `unmap`, `query`. Workable early TLB flush policy implemented.
+- [ ] Controlled user-mode entry path exists (`iret` into ring3 works)
+- [ ] Fault policy split exists:
+    - [ ] Kernel fault => panic
+	- [ ] User fault => kill offending process
 
 Exit criteria:
 - Kernel runs with paging on.

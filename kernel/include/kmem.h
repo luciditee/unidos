@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define MEM_REGIONS_MAX 32
+#define MEM_REGIONS_MAX 256
 
 typedef enum {
     MEM_USABLE = 1,
@@ -27,7 +27,8 @@ typedef enum {
 typedef enum {
     PMM_RESERVE_SUCCESS = 0,
     PMM_NO_MORE_REGION_SLOTS = 1,
-    PMM_INVALID_REGION_LENGTH = 2
+    PMM_INVALID_REGION_LENGTH = 2,
+    PMM_UPDATED_EXISTING_REGION = 3
 } pmm_reserve_result_t;
 
 typedef struct {

@@ -44,6 +44,7 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/sched.c
   ${CMAKE_SOURCE_DIR}/kernel/bootinfo.c
   ${CMAKE_SOURCE_DIR}/kernel/kmem.c
+  ${CMAKE_SOURCE_DIR}/kernel/paging.c
 )
 
 set(KERNEL_INCLUDE_DIRS
@@ -149,6 +150,7 @@ foreach(KERNEL_C_SOURCE IN LISTS KERNEL_C_SOURCES)
             -ffreestanding
             -fno-stack-protector
             -fno-pie
+            -march=i386
             -nostdlib
             -nostartfiles
             -Wall

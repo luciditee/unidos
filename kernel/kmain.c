@@ -52,6 +52,18 @@ void test_task5() {
     }
 }
 
+static void trigger_intentional_page_fault(void) {
+    // Match paging.c rounding: map up to nearest 4MiB boundary.
+    uint32_t mapped_end = (g_avail_memory_kib << 10);
+    mapped_end = (mapped_end + 0x3FFFFF) & ~0x3FFFFF;
+
+    // First page beyond mapped identity window.
+    volatile uint32_t* p = (volatile uint32_t*)(mapped_end + 0x1000);
+
+    kdbg_puts("Triggering intentional #PF...\r\n", 0x0E);
+    *p = 0xDEADBEEF; // should fault (W=1, P=0 expected)
+}
+
 void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     (void)kparam_ptr;
     (void)kparam_length;
@@ -63,14 +75,15 @@ void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     mem_init();
     kb_init();
     sched_init();
-    isr_register(3, on_int3);
-
+    //isr_register(3, on_int3);
     __asm__ __volatile__ ("sti");
 
-    /*sched_add_task(test_task1);
-    sched_add_task(test_task2);
+    trigger_intentional_page_fault();
+
+    //sched_add_task(test_task1);
+    //sched_add_task(test_task2);
     //sched_add_task(test_task2); // test multiple instances
-    sched_add_task(test_task3);
+    /*sched_add_task(test_task3);
     sched_add_task(test_task4);
     sched_add_task(test_task5);*/
 

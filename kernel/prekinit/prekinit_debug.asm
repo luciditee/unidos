@@ -234,9 +234,13 @@ debug:
     DBG_LABEL_HEX _reg_ebp, SNAP_EBP
     DBG_LABEL_HEX _reg_esp, SNAP_ESP
 
-    ; Newline + flags (line 3)
+    ; Newline + flags + EIP (line 3)
     DBG_PUTS _debug_newline
     DBG_LABEL_HEX _dbg_efl, SNAP_EFLAGS
+    ; Note: we can't get the "current" EIP directly, but we can show the caller's EIP from the stack.
+    mov eax, [ebx + SNAP_ESP]   ; caller return address is at ESP before pushad
+    mov edx, DBG_ATTR
+    call debug.hexprint 
     DBG_PUTS _debug_newline
 
     ; Restore caller context exactly as it was at entry.

@@ -1,8 +1,11 @@
 
 #include "kmain.h"
 #include "kmem.h"
+#include "paging.h"
 #include "bootinfo.h"
-    
+
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 // Physical memory management bitmap and region tracking structure
 static uint8_t* pagebitmap;
@@ -21,7 +24,10 @@ static inline void bm_clear(uint32_t f) { pagebitmap[f >> 3] &= ~(1u << (f & 7))
 #define STAGE2_RESERVED_SECTORS 6
 #endif
 
+extern uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status);
+
 void pmm_init(mem_region_t* regions, size_t region_count);
+pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length, bool init);
 
 void mem_init(void) {
     if (!g_bootinfo_validated) {
@@ -30,16 +36,21 @@ void mem_init(void) {
         return;
     }
 
-    #define ADD_REGION(b, l, t) do { \
-        if (n < MEM_REGIONS_MAX) { \
-            mem_regions[n].base = (b); \
-            mem_regions[n].length = (l); \
-            mem_regions[n].type = (t); \
-            n++; \
-        } \
-    } while(0)
-
-    size_t n = 0;
+    #define RESERVE_REGION(base, length, init) \
+        do { \
+            pmm_reserve_result_t r = pmm_reserve_range(base, length, init); \
+            if (r != PMM_RESERVE_SUCCESS && r != PMM_UPDATED_EXISTING_REGION) { \
+                kdbg_puts("fatal: failed to reserve region at ", 0x0C); \
+                kdbg_hex32(base, 0x0C); \
+                kdbg_puts(" of length ", 0x0C); \
+                kdbg_hex32(length, 0x0C); \
+                kdbg_puts("\r\nstatus: ", 0x0C); \
+                kdbg_hex32((uint32_t)r, 0x0C); \
+                kdbg_puts("\r\n", 0x0C); \
+                kdbg_dump_current(); \
+                HALT_FOREVER; \
+            } \
+        } while (0)
 
     // Kernel scratch memory reservation
     // Note: overlaps with VGA memory reservation, BIOS area,
@@ -47,26 +58,28 @@ void mem_init(void) {
     // but this is simpler than trying to carve out usable regions
     // REQUIRED if we want to keep programs from allocating memory
     // below 1MB
-    ADD_REGION(0, 0x100000, MEM_RESERVED);
+    RESERVE_REGION(0, 0x100000, false);
+
+    // optimization: frame hint can start at the end of this reserved region
+    frame_hint = 0x100000 >> 12; // convert to frame number
 
     // Stage2 boot region
     // TODO: Should change 512 to build env macro
-    ADD_REGION(0x10000, STAGE2_RESERVED_SECTORS * 512, MEM_RESERVED);
+    RESERVE_REGION(0x10000, STAGE2_RESERVED_SECTORS * 512, false);
 
     // VGA memory reservation
-    ADD_REGION(0xA0000, 0x20000, MEM_RESERVED);
-
+    RESERVE_REGION(0xA0000, 0x20000, false);
     // BIOS/ROM reserved area
-    ADD_REGION(0xC0000, 0x40000, MEM_RESERVED);
+    RESERVE_REGION(0xC0000, 0x40000, false);
 
     // BOOTINFO reservation
-    ADD_REGION(BOOTINFO_LINEAR_ADDR, BOOTINFO_SIZE_EXPECTED, MEM_RESERVED);
+    RESERVE_REGION(BOOTINFO_LINEAR_ADDR, BOOTINFO_SIZE_EXPECTED, false);
 
     // Kernel image reservation
-    ADD_REGION(g_kernel_phys_address, g_kernel_size_bytes, MEM_RESERVED);    
+    RESERVE_REGION(g_kernel_phys_address, g_kernel_size_bytes, false);
 
     // Kernel params reservation
-    ADD_REGION(g_kparams_phys_address, g_kparams_size_bytes, MEM_RESERVED);
+    RESERVE_REGION(g_kparams_phys_address, g_kparams_size_bytes, false);
 
     // Parse E820 memory map and mark unusable regions as reserved.
     if (g_memory_method == USE_E820) {
@@ -87,24 +100,31 @@ void mem_init(void) {
                 uint32_t len32 = (uint32_t)(end64 - base64);
                 if (len32 == 0) continue;
                 
-                if (n >= MEM_REGIONS_MAX) {
+                if (mem_region_count >= MEM_REGIONS_MAX) {
                     kdbg_puts("fatal: e820 memory map has more reserved regions than MEM_REGIONS_MAX\r\n", 0x0C);
                     HALT_FOREVER;
                     break;
                 }
 
-                ADD_REGION(base32, len32, MEM_RESERVED);
+                RESERVE_REGION(base32, len32, false);
             }
         }
     }
 
-    // Update usable memory region count
-    mem_region_count = n;
-
-    #undef ADD_REGION
+    #undef RESERVE_REGION
 
     // init physical memory manager
     pmm_init((mem_region_t*)mem_regions, mem_region_count);
+
+    // init paging with 1:1 mapping of all available memory
+    paging_status_t pg_res;
+    paging_init_identity_window(0, &pg_res);
+    if (pg_res != PAGING_OK) {
+        kdbg_puts("fatal: paging_init_identity_window failed with code ", 0x0C);
+        kdbg_hex32((uint32_t)pg_res, 0x0C);
+        kdbg_puts("\r\n", 0x0C);
+        HALT_FOREVER;
+    }
 }
 
 static void bm_set_range_touched(uint32_t base, uint32_t len) {
@@ -159,7 +179,7 @@ void pmm_init(mem_region_t* regions, size_t region_count) {
     uint64_t loc = (uint64_t)g_kernel_phys_address + (uint64_t)g_kernel_size_bytes;
     loc = (loc + 0xFFFULL) & ~0xFFFULL;
 
-    // Check that the bitmap fits in memory, and halt if it doesn't. If this triggers, you may need to reduce g_avail_memory_kib in your stage2 binary.
+    // Check that the bitmap fits in memory, and halt if it doesn't.
     if (loc + (uint64_t)pagebitmap_size_bytes > top_bytes64)
         HALT_FOREVER;
     
@@ -189,7 +209,7 @@ void pmm_init(mem_region_t* regions, size_t region_count) {
     bm_set_range_touched(loc, pagebitmap_size_bytes);
 }
 
-bool pmm_is_region_reserved(uint32_t address, uint32_t length) {
+bool pmm_is_region_reserved(uint32_t address, uint32_t length, mem_region_t** out_overlap) {
     if (length == 0) return false; // we need nonzero length
 
     for(size_t i = 0; i < mem_region_count; i++) {
@@ -203,8 +223,11 @@ bool pmm_is_region_reserved(uint32_t address, uint32_t length) {
         //bool endOverlap = ((uint64_t)span_end > (uint64_t)r->base) && ((uint64_t)span_end <= region_end);
         //bool coversRegion = length != 0 && ((uint64_t)address <= (uint64_t)r->base) && ((uint64_t)span_end >= region_end);
         bool simplifiedOverlap = ((uint64_t)address < region_end) && ((uint64_t)r->base < (uint64_t)span_end);
-        if (r->type == MEM_RESERVED && simplifiedOverlap)
+        if (r->type == MEM_RESERVED && simplifiedOverlap) {
+            if (out_overlap) 
+                *out_overlap = (mem_region_t*)r;
             return true;
+        }
     }
     return false;
 }
@@ -250,7 +273,7 @@ pmm_free_result_t pmm_free_frame(uint32_t address) {
     if (f >= frame_count) return PMM_PAGE_OUTOFBOUNDS;
 
     // check that the page isn't reserved by an explicitly reserved region
-    if (pmm_is_region_reserved(address, 4096))
+    if (pmm_is_region_reserved(address, 4096, NULL))
         return PMM_PAGE_RESERVED;
 
     // otherwise, attempt to free the page (or report it as already free)
@@ -263,14 +286,49 @@ pmm_free_result_t pmm_free_frame(uint32_t address) {
     }
 }   
 
-pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length) {
-    // ensure we have room to track regions
-    if (mem_region_count >= MEM_REGIONS_MAX) 
-        return PMM_NO_MORE_REGION_SLOTS;
-    
+bool pmm_query_frame(uint32_t address) {
+    if (address % 4096 != 0) return false; // only page-frame aligned addresses are valid
+
+    uint32_t f = address >> 12; // phys address to page frame number
+    if (f >= frame_count) return false; // out of bounds addresses are not reserved
+
+    // If bit is set, frame is reserved/allocated, otherwise it's free.
+    // Note that if ever an explicitly reserved frame gets marked free in the
+    // bitmap, pmm_query_frame may return true. For this reason, callers
+    // may also use pmm_is_region_reserved to check if an address is reserved
+    // explicitly to be able to safely use the address.
+    return (pagebitmap[f >> 3] & (1u << (f & 7))) != 0;
+}
+
+pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length, bool init) {
     // ensure we treat zero-length ranges as invalid and don't add them
     if (length == 0)
         return PMM_INVALID_REGION_LENGTH;
+
+    // We check overlap *before* slot-capacity checks because coalescing into an
+    // existing region should still succeed even when MEM_REGIONS_MAX is reached.
+    mem_region_t* overlap = NULL;
+    if (pmm_is_region_reserved(base, length, &overlap)) {
+        // IMPORTANT: capture original region extents before mutating base/length.
+        // If we update base first and then compute end from (new base + old length),
+        // we can accidentally shrink the existing region. Using old_end avoids that.
+        uint32_t old_base = overlap->base;
+        uint32_t old_len = overlap->length;
+        uint32_t old_end = old_base + old_len;
+        uint32_t new_end = base + length;
+
+        overlap->base = MIN(old_base, base);
+        overlap->length = MAX(old_end, new_end) - overlap->base;
+
+        // init=true means "apply reservation to bitmap now" for this span.
+        // Re-applying to the merged region is safe/idempotent (bits remain set).
+        if (init) pmm_init_single(overlap);
+        return PMM_UPDATED_EXISTING_REGION;
+    }
+
+    // No overlap to coalesce with; now we need a free slot for a new region record.
+    if (mem_region_count >= MEM_REGIONS_MAX)
+        return PMM_NO_MORE_REGION_SLOTS;
 
     size_t idx = mem_region_count;
     mem_regions[idx].base = base;
@@ -278,6 +336,133 @@ pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length) {
     mem_regions[idx].type = MEM_RESERVED;
     mem_region_count = idx + 1;
 
-    pmm_init_single((mem_region_t*)&mem_regions[idx]);
+    if (init) pmm_init_single((mem_region_t*)&mem_regions[idx]);
     return PMM_RESERVE_SUCCESS;
+}
+
+int pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear) {
+    if (!out_phys_addr) return -2; // TODO: enum this
+
+    // E820 memory map could mean a memory hole in weird places that is system-defined
+    // and out of our control. We can fudge this by allocating a frame for our PD,
+    // keeping a copy of its address, freeing it, then reserving it, guaranteeing
+    // we will always pick the first unreserved, unused frame.
+
+    uint32_t ret_frame = frame_hint; // start at hint since it's likely to be near the end of reserved regions, but we will loop around if needed
+    bool found = false;
+    for (uint32_t f = ret_frame, counted = 0; counted < frame_count; f = ((f+1 >= frame_count) ? 0 : f+1), counted++) {
+        if (!pmm_is_region_reserved(f << 12, 4096, NULL) && !pmm_query_frame(f << 12)) {
+            ret_frame = f;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return -1; // no free frame (TODO: enum this)
+
+    // Reserve frame in region tracking
+    pmm_reserve_result_t reserve_result = pmm_reserve_range(ret_frame << 12, 4096, true);
+    // Reservation may either add a new region or coalesce into an existing one;
+    // both are successful outcomes from PMM's perspective.
+    if (reserve_result != PMM_RESERVE_SUCCESS && reserve_result != PMM_UPDATED_EXISTING_REGION)
+        return -3; // failed to reserve fram (TODO: enum this)
+    
+    // Update bitmap
+    bm_set(ret_frame);
+
+    // Update hint and set return value
+    frame_hint = (ret_frame+1) % frame_count; // next search can start at the next frame to optimize contiguity
+    *out_phys_addr = ret_frame << 12; // convert frame number to physical address
+    
+    // Zero out the reserved page frame if requested
+    if (clear) {
+        uint8_t* ptr = (uint8_t*)(*out_phys_addr);
+        for (size_t i = 0; i < 4096; i++) ptr[i] = 0;
+    }
+
+    return 0;
+}
+
+int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32_t* out_count, bool clear) {
+    // This function does effectively the same thing as pmm_reserve_pageframe, but
+    // for a sequence of contiguous page frame. The return value is a status code,
+    // and the out parameters are a pointer to an array of reserved physical
+    // addresses of page frames, as well as the count of how many were successfully
+    // reserved. No allocations are performed, caller provides buffer, and must
+    // ensure that buffer has at least 'requested' elements. Unless there are no
+    // remaining page frames, if no other errors occur, this function is guaranteed
+    // to return at least one reserved page frame.
+
+    // sanity-check request
+    if (!requested || !out_reserved || !out_count) return -2; // TODO: enum this
+
+    uint32_t curFrame = frame_hint; // start at hint
+    bool found = false;
+    for (uint32_t f = curFrame, counted = 0; counted < frame_count; f = ((f+1 >= frame_count) ? 0 : f+1), counted++) {
+        // Walk the bitmap starting at the hint. We initially only look
+        // for one free frame to find a starting point.
+        if (!pmm_is_region_reserved(f << 12, 4096, NULL) && !pmm_query_frame(f << 12)) {
+            curFrame = f;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) return -1; // no free frame (TODO: enum this)
+
+    // We found a free frame. Try to reserve a contiguous space as big
+    // as the request.
+
+    // Step 1: Expand our window to the maximum size of the request, starting
+    // from the free frame and ending at either bitmap-end or extents of the request,
+    // whichever comes first.
+    // 1A: Check if any element of window is reserved. If so, shrink window by 1 page.
+    // 1B: Repeat 1A until we have a fully unreserved window, or shrink to 1 frame total.
+    // 1C: When an unreserved window is found, check if it's taken in the bitmap. If so,
+    //     shrink window to be [firstFreeFrame, firstTakenFrame-1] inclusive.
+    // Step 2: Reserve whatever we're left with in region tracking and bitmap. Update
+    //         output parameters.
+    // Step 3: Set hint to frame after the newly reserved window.
+    // Step 4: Clear out reserved window, if requested.
+
+    // Step 1
+    *out_count = requested;
+    for (size_t i = requested; i > 0; i--) {
+        uint32_t checkFrame = curFrame + i - 1;
+        if (checkFrame >= frame_count) {
+            *out_count = i - 1; // we can only reserve up to the end of the bitmap
+            break;
+        }
+        if (pmm_is_region_reserved(checkFrame << 12, 4096, NULL)) {
+            *out_count = i - 1; // we can only reserve up to the first reserved frame
+            break;
+        }
+        if (pmm_query_frame(checkFrame << 12)) {
+            *out_count = i - 1; // we can only reserve up to the first taken frame
+            break;
+        }    
+    }
+
+    // Step 2
+    // Note: We reserve region as one big chunk, but set bits in bitmap piecemeal
+    // This is to reduce churn in the region tracking structure, which has limited capacity
+    pmm_reserve_result_t reserve_result = pmm_reserve_range(curFrame << 12, (*out_count) << 12, true);
+    if (reserve_result != PMM_RESERVE_SUCCESS && reserve_result != PMM_UPDATED_EXISTING_REGION)
+        return -3; // failed to reserve frame (TODO: enum this)
+    for (size_t i = 0; i < *out_count; i++) {
+        bm_set(curFrame + i);
+        out_reserved[i] = (curFrame + i) << 12; // convert frame number to physical address
+    }
+
+    // Step 3
+    frame_hint = (curFrame + *out_count) % frame_count;
+    
+    // Step 4
+    if (clear) {
+        for (size_t i = 0; i < *out_count; i++) {
+            uint8_t* ptr = (uint8_t*)(out_reserved[i]);
+            for (size_t j = 0; j < 4096; j++) ptr[j] = 0;
+        }
+    }
+    
+    return 0;
 }
