@@ -2,6 +2,8 @@ bits 32
 
 global start
 extern kmain
+extern __bss_start
+extern __kernel_end
 
 section .text.start
 
@@ -33,7 +35,9 @@ kernel:
     call gdt_tss_init   ; GDT and TSS *must* exist before we can do anything else
     call idt_init       ; IDT must also exist, but handlers won't be installed until later
     call vgatext.cls    ; Clear screen. Partly serves as a debugging checkpoint.
-
+    call .kernel_bss_zero ; Zero out the .bss section before we do anything else, to 
+                          ; ensure global/static variables are zero-initialized as expected.
+                        ; Deliberate fallthrough to maskpic and kmain call
 .maskpic:
     ; Mask PIC while early C bootstrap is brought up.
     mov al, 0xFF
@@ -44,14 +48,15 @@ kernel:
     mov esi, kentry_verstr
     mov dl, 0x0E
     call vgatext.puts
-
+    ; Fallthrough to kmain
     ; cdecl call: kmain(uint32_t kparam_ptr, uint32_t kparam_length)
+.run_kmain:
     movzx eax, word [kparam_length]
     push eax
     push dword [kparam_ptr]
     call kmain
     add esp, 8
-
+.kmain_returned:
     mov esi, kmain_returned
     mov dl, 0x0C
     call vgatext.puts
@@ -60,9 +65,25 @@ kernel:
     hlt
     jmp .halt
 
+.kernel_bss_zero:
+    ; Zero out the .bss section (uninitialized global/static variables)
+    push edi
+    push ecx
+    push eax
+    mov edi, __bss_start
+    mov ecx, __kernel_end
+    sub ecx, edi
+    xor eax, eax
+    cld
+    rep stosb
+    pop eax
+    pop ecx
+    pop edi
+    ret
+
 section .rodata
 kentry_verstr db UNIDOS_VERSION,13,10,0
-kmain_returned db 13,10,'kmain returned unexpectedly',13,10,0
+kmain_returned db 13,10,'fatal: kmain returned unexpectedly',13,10,0
 
 section .data
 kparam_length dw 0

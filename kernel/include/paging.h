@@ -15,8 +15,16 @@ typedef enum {
     PAGING_ERR_NOMEM,
     PAGING_ERR_NOT_MAPPED,
     PAGING_ERR_ALREADY_MAPPED,
-    PAGING_ERR_PT_COUNT_MISMATCH,
-    PAGING_ERR_INIT_RESERVE_FAILED
+    PAGING_ERR_NOT_MAPPED_OR_ALREADY_MAPPED,
+    PAGING_ERR_INIT_RESERVE_FAILED,
+    PAGING_ERR_FRAME_RESERVE_FAILED,
+    PAGING_ERR_NOT_PRESENT,
+    PAGING_ERR_OUT_OF_BOUNDS,
+    PAGING_ERR_FAILED_RETRIEVE_PT,
+    PAGING_ERR_NOT_INITIALIZED,
+    PAGING_ERR_EXCESS_PAGES_REQUESTED,
+    PAGING_ERR_INVALID,
+    PAGING_ERR_PT_USER_FLAG_MISMATCH
 } paging_status_t;
 
 typedef struct {
@@ -60,10 +68,15 @@ static inline uint16_t page_offset(linear_addr_t la) {
     return la & 0xFFF;
 }
 
+static inline bool is_page_aligned(uint32_t addr) {
+    return (addr & 0xFFF) == 0;
+}
+
 // Creates PD/PTs, identity maps, loads CR3, sets CR0.PG
 uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status);
 
-paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags);
-paging_status_t paging_unmap_page(uint32_t virt_addr);
-paging_query_result_t paging_query_page(uint32_t virt_addr);
+bool is_paging_ready();
+paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags, uint32_t* out_addr);
+paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr);
+paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out_result);
 

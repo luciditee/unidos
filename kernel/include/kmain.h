@@ -41,3 +41,6 @@ void kdbg_hex32(uint32_t value, uint32_t attr);
 uint32_t kdbg_get_cursor_linear(void);
 
 void kmain(uint32_t kparam_ptr, uint32_t kparam_length);
+
+extern const uint32_t __kernel_start;
+extern const uint32_t __kernel_end;

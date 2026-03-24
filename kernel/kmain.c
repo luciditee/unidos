@@ -53,7 +53,7 @@ void test_task5() {
 }
 
 static void trigger_intentional_page_fault(void) {
-    // Match paging.c rounding: map up to nearest 4MiB boundary.
+    // map up to nearest 4MiB boundary
     uint32_t mapped_end = (g_avail_memory_kib << 10);
     mapped_end = (mapped_end + 0x3FFFFF) & ~0x3FFFFF;
 
@@ -64,21 +64,24 @@ static void trigger_intentional_page_fault(void) {
     *p = 0xDEADBEEF; // should fault (W=1, P=0 expected)
 }
 
+extern void test_paging();
+
 void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
     (void)kparam_ptr;
     (void)kparam_length;
     kdbg_puts("Entering kmain\r\n", 0x0F);
 
     bootinfo_init();
-    pic_remap();
-    pit_init();
     mem_init();
+    pic_remap();
+    pit_init();    
+    test_paging();
     kb_init();
     sched_init();
     //isr_register(3, on_int3);
     __asm__ __volatile__ ("sti");
 
-    trigger_intentional_page_fault();
+    //trigger_intentional_page_fault();
 
     //sched_add_task(test_task1);
     //sched_add_task(test_task2);

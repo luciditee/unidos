@@ -10,6 +10,11 @@ set(UNIDOS_VERSION "\"${UNIDOS_DISPLAYNAME} ${UNIDOS_VERSION_MAJOR}.${UNIDOS_VER
 set(UNIDOS_OUT_DIR ${CMAKE_BINARY_DIR}/out)
 file(MAKE_DIRECTORY ${UNIDOS_OUT_DIR})
 
+# Kernel address-space constants (kept explicit for paging/higher-half work).
+set(KERNEL_PHYS_BASE 0x00100000 CACHE STRING "Physical load base address for the kernel image")
+set(KERNEL_VIRT_BASE 0xC0000000 CACHE STRING "Virtual base address reserved for kernel mapping")
+set(KERNEL_VIRT_OFFSET 0xBFF00000 CACHE STRING "Kernel virtual-physical offset (KERNEL_VIRT_BASE - KERNEL_PHYS_BASE)")
+
 find_program(NASM_EXECUTABLE nasm REQUIRED)
 find_program(PYTHON3_EXECUTABLE python3 REQUIRED)
 find_program(LD_EXECUTABLE ld REQUIRED)
@@ -45,6 +50,7 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/bootinfo.c
   ${CMAKE_SOURCE_DIR}/kernel/kmem.c
   ${CMAKE_SOURCE_DIR}/kernel/paging.c
+  ${CMAKE_SOURCE_DIR}/kernel/kremap.c
 )
 
 set(KERNEL_INCLUDE_DIRS
@@ -122,7 +128,16 @@ foreach(KERNEL_ASM_SOURCE IN LISTS KERNEL_ASM_SOURCES)
   add_custom_command(
     OUTPUT ${KERNEL_ASM_OBJ}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${KERNEL_OBJ_DIR}
-    COMMAND ${NASM_EXECUTABLE} -DUNIDOS_VERSION=${UNIDOS_VERSION} ${NASM_KERNEL_INCLUDE_FLAGS} -f elf32 -MD ${KERNEL_ASM_DEPFILE} -o ${KERNEL_ASM_OBJ} ${KERNEL_ASM_SOURCE}
+    COMMAND ${NASM_EXECUTABLE}
+            -DUNIDOS_VERSION=${UNIDOS_VERSION}
+            -DKERNEL_PHYS_BASE=${KERNEL_PHYS_BASE}
+            -DKERNEL_VIRT_BASE=${KERNEL_VIRT_BASE}
+            -DKERNEL_VIRT_OFFSET=${KERNEL_VIRT_OFFSET}
+            ${NASM_KERNEL_INCLUDE_FLAGS}
+            -f elf32
+            -MD ${KERNEL_ASM_DEPFILE}
+            -o ${KERNEL_ASM_OBJ}
+            ${KERNEL_ASM_SOURCE}
     DEPFILE ${KERNEL_ASM_DEPFILE}
     DEPENDS ${KERNEL_ASM_SOURCE}
     COMMENT "Assembling ${KERNEL_ASM_NAME_WE}.asm"
@@ -158,6 +173,9 @@ foreach(KERNEL_C_SOURCE IN LISTS KERNEL_C_SOURCES)
             ${KERNEL_C_INCLUDE_FLAGS}
             -DUNIDOS_VERSION=${UNIDOS_VERSION}
             -DSTAGE2_RESERVED_SECTORS=${STAGE2_RESERVED_SECTORS}
+            -DKERNEL_PHYS_BASE=${KERNEL_PHYS_BASE}
+            -DKERNEL_VIRT_BASE=${KERNEL_VIRT_BASE}
+            -DKERNEL_VIRT_OFFSET=${KERNEL_VIRT_OFFSET}
             -MMD
             -MF ${KERNEL_C_DEPFILE}
             -c ${KERNEL_C_SOURCE}
@@ -176,6 +194,9 @@ add_custom_command(
   COMMAND ${LD_EXECUTABLE}
           -m elf_i386
           -nostdlib
+          --defsym=KERNEL_PHYS_BASE=${KERNEL_PHYS_BASE}
+          --defsym=KERNEL_VIRT_BASE=${KERNEL_VIRT_BASE}
+          --defsym=KERNEL_VIRT_OFFSET=${KERNEL_VIRT_OFFSET}
           -T ${KERNEL_LINKER_SCRIPT}
           -o ${KERNEL_ELF}
           ${KERNEL_OBJECTS}

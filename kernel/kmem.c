@@ -75,10 +75,17 @@ void mem_init(void) {
     // BOOTINFO reservation
     RESERVE_REGION(BOOTINFO_LINEAR_ADDR, BOOTINFO_SIZE_EXPECTED, false);
 
+    /*kdbg_hex32(g_kernel_phys_address, 0x0F);
+    kdbg_puts(" ", 0x0F);
+    kdbg_hex32(g_kernel_phys_address + g_kernel_size_bytes, 0x0F);
+    kdbg_puts("\r\n", 0x0F);*/
+
     // Kernel image reservation
-    RESERVE_REGION(g_kernel_phys_address, g_kernel_size_bytes, false);
+    //RESERVE_REGION(g_kernel_phys_address, (g_kernel_size_bytes + 0xFFF) & ~0xFFF, false);
+    RESERVE_REGION(g_kernel_phys_address, (uint32_t)(&__kernel_end) - g_kernel_phys_address, false);
 
     // Kernel params reservation
+    //RESERVE_REGION(g_kparams_phys_address, (g_kparams_size_bytes + 0xFFF) & ~0xFFF, false);
     RESERVE_REGION(g_kparams_phys_address, g_kparams_size_bytes, false);
 
     // Parse E820 memory map and mark unusable regions as reserved.
@@ -125,6 +132,18 @@ void mem_init(void) {
         kdbg_puts("\r\n", 0x0C);
         HALT_FOREVER;
     }
+
+    kdbg_puts("g_kernel_phys_address: ", 0x0A);
+    kdbg_hex32(g_kernel_phys_address, 0x0A);
+    kdbg_puts("\r\ng_kernel_size_bytes: ", 0x0A);
+    kdbg_hex32(g_kernel_size_bytes, 0x0A);
+    kdbg_puts("\r\n__kernel_end: ", 0x0A);
+    kdbg_hex32((uint32_t)&__kernel_end, 0x0A);
+    kdbg_puts("\r\nbitmap start: ", 0x0A);
+    kdbg_hex32((uint32_t)pagebitmap, 0x0A);
+    kdbg_puts("\r\nbitmap end: ", 0x0A);
+    kdbg_hex32((uint32_t)pagebitmap + pagebitmap_size_bytes, 0x0A);
+    kdbg_puts("\r\n", 0x0A);
 }
 
 static void bm_set_range_touched(uint32_t base, uint32_t len) {
@@ -176,7 +195,7 @@ void pmm_init(mem_region_t* regions, size_t region_count) {
     pagebitmap_size_bytes = (frame_count + 7u) >> 3;
 
     // Bitmap goes immediately after the kernel image
-    uint64_t loc = (uint64_t)g_kernel_phys_address + (uint64_t)g_kernel_size_bytes;
+    uint64_t loc = (uint64_t)((uint32_t)(&__kernel_end));
     loc = (loc + 0xFFFULL) & ~0xFFFULL;
 
     // Check that the bitmap fits in memory, and halt if it doesn't.
@@ -340,8 +359,8 @@ pmm_reserve_result_t pmm_reserve_range(uint32_t base, uint32_t length, bool init
     return PMM_RESERVE_SUCCESS;
 }
 
-int pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear) {
-    if (!out_phys_addr) return -2; // TODO: enum this
+paging_status_t pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear) {
+    if (!out_phys_addr) return PAGING_ERR_INVALID; // TODO: enum this
 
     // E820 memory map could mean a memory hole in weird places that is system-defined
     // and out of our control. We can fudge this by allocating a frame for our PD,
@@ -357,14 +376,14 @@ int pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear) {
             break;
         }
     }
-    if (!found) return -1; // no free frame (TODO: enum this)
+    if (!found) return PAGING_ERR_NOMEM; // no free frame (TODO: enum this)
 
     // Reserve frame in region tracking
     pmm_reserve_result_t reserve_result = pmm_reserve_range(ret_frame << 12, 4096, true);
     // Reservation may either add a new region or coalesce into an existing one;
     // both are successful outcomes from PMM's perspective.
     if (reserve_result != PMM_RESERVE_SUCCESS && reserve_result != PMM_UPDATED_EXISTING_REGION)
-        return -3; // failed to reserve fram (TODO: enum this)
+        return PAGING_ERR_FRAME_RESERVE_FAILED; // failed to reserve frame (TODO: enum this)
     
     // Update bitmap
     bm_set(ret_frame);
@@ -379,10 +398,10 @@ int pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear) {
         for (size_t i = 0; i < 4096; i++) ptr[i] = 0;
     }
 
-    return 0;
+    return PAGING_OK;
 }
 
-int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32_t* out_count, bool clear) {
+paging_status_t pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32_t* out_count, bool clear) {
     // This function does effectively the same thing as pmm_reserve_pageframe, but
     // for a sequence of contiguous page frame. The return value is a status code,
     // and the out parameters are a pointer to an array of reserved physical
@@ -393,7 +412,7 @@ int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32
     // to return at least one reserved page frame.
 
     // sanity-check request
-    if (!requested || !out_reserved || !out_count) return -2; // TODO: enum this
+    if (!requested || !out_reserved || !out_count) return PAGING_ERR_INVALID; // TODO: enum this
 
     uint32_t curFrame = frame_hint; // start at hint
     bool found = false;
@@ -407,7 +426,7 @@ int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32
         }
     }
 
-    if (!found) return -1; // no free frame (TODO: enum this)
+    if (!found) return PAGING_ERR_NOMEM; // no free frame (TODO: enum this)
 
     // We found a free frame. Try to reserve a contiguous space as big
     // as the request.
@@ -447,7 +466,7 @@ int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32
     // This is to reduce churn in the region tracking structure, which has limited capacity
     pmm_reserve_result_t reserve_result = pmm_reserve_range(curFrame << 12, (*out_count) << 12, true);
     if (reserve_result != PMM_RESERVE_SUCCESS && reserve_result != PMM_UPDATED_EXISTING_REGION)
-        return -3; // failed to reserve frame (TODO: enum this)
+        return PAGING_ERR_FRAME_RESERVE_FAILED; // failed to reserve frame (TODO: enum this)
     for (size_t i = 0; i < *out_count; i++) {
         bm_set(curFrame + i);
         out_reserved[i] = (curFrame + i) << 12; // convert frame number to physical address
@@ -464,5 +483,5 @@ int pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32
         }
     }
     
-    return 0;
+    return PAGING_OK;
 }

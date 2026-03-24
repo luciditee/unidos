@@ -130,14 +130,20 @@ Goal: move from flat physical assumptions to managed virtual memory.
 - [X] Add robust `#PF` handler diagnostics (fault addr from `CR2`, error code decode).
 
 ### 5.3 Post-bootstrap paging/runtime gates
-Note: These items may be implemented in parallel with milestone 6. They are not required to declare Milestone 5.2 complete, but are required for stable kernel/user bringup in Milestone 6.
+Note: 5.3 and 5.4 items may be implemented in parallel with milestone 6. They are not required to declare Milestone 5.2 complete, but are required for stable kernel/user bringup in Milestone 6.
 
 - [~] `#PF` handler prints [X] CR2, [X] raw error code, [X] P/W/U, and [ ] EIP/CS.
-- [ ] Paging API exists and works: `map`, `unmap`, `query`. Workable early TLB flush policy implemented.
+- [X] Paging API exists and works: `map`, `unmap`, `query`. Workable early TLB flush policy implemented.
 - [ ] Controlled user-mode entry path exists (`iret` into ring3 works)
 - [ ] Fault policy split exists:
     - [ ] Kernel fault => panic
 	- [ ] User fault => kill offending process
+
+### 5.4 Higher-Half Refactor
+- [ ] Linker script updated to reflect kernel image copy to high memory
+- [ ] .bss section explicitly zeroed in kernel init assembly
+- [ ] PMM frames and VMM pages reserved for kernel code and kernel stack, with [ ] guard page at end of stack (with value definable as N pages, default 4 e.g. 16KiB of stack space, likely more in practical use)
+- [ ] Kernel remapped to new region and far jump handled accordingly
 
 Exit criteria:
 - Kernel runs with paging on.
