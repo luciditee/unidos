@@ -7,6 +7,7 @@
 #include "bootinfo.h"
 #include "include/sched.h"
 #include "kmem.h"
+#include "kremap.h"
 
 static void on_int3(trap_frame_t* tf) {
     (void)tf;
@@ -66,13 +67,16 @@ static void trigger_intentional_page_fault(void) {
 
 extern void test_paging();
 
-void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
-    (void)kparam_ptr;
-    (void)kparam_length;
-    kdbg_puts("Entering kmain\r\n", 0x0F);
-
+void ktrampoline() {
     bootinfo_init();
     mem_init();
+    kernel_highhalf_remap();
+    return;
+}
+
+void kmain() {
+    kdbg_puts("Entered kmain\r\n", 0x0F);
+
     pic_remap();
     pit_init();    
     test_paging();
@@ -83,8 +87,8 @@ void kmain(uint32_t kparam_ptr, uint32_t kparam_length) {
 
     //trigger_intentional_page_fault();
 
-    //sched_add_task(test_task1);
-    //sched_add_task(test_task2);
+    sched_add_task(test_task1);
+    sched_add_task(test_task2);
     //sched_add_task(test_task2); // test multiple instances
     /*sched_add_task(test_task3);
     sched_add_task(test_task4);

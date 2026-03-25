@@ -18,7 +18,7 @@ volatile uint64_t last_sched_tick = 0;
 static task_t list[MAX_THREADS] = {0};
 
 static void task_bootstrap(void);
-static void sched_on_int80h(trap_frame_t* tf);
+static void sched_on_int81h(trap_frame_t* tf);
 static void sched_idle(void);
 
 static task_t* alloc_slot(void) {
@@ -78,7 +78,7 @@ void sched_init(void) {
     sched_pending = 0;
     rr_ticks_left = RR_SCHEDULER_CADENCE;
 
-    isr_register(0x80, sched_on_int80h);
+    isr_register(0x81, sched_on_int81h);
     sched_add_task(sched_idle);
 }
 
@@ -267,7 +267,7 @@ void sched_task_yield() {
     if (!current) return; // should not happen
     
     sched_pending = 1;
-    __asm__ __volatile__("int $0x80");
+    __asm__ __volatile__("int $0x81");
 }
 
 void sched_on_tick(void) {
@@ -301,7 +301,7 @@ static void task_bootstrap(void) {
     for (;;) { __asm__ __volatile__("hlt"); }
 }
 
-static void sched_on_int80h(trap_frame_t* tf) {
+static void sched_on_int81h(trap_frame_t* tf) {
     // Note: common ISR handler stub triggers the scheduler on return,
     // so this function is a no-op.
     (void)tf; // ignore trap frame

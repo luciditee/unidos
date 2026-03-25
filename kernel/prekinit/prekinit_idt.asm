@@ -5,6 +5,8 @@ bits 32
 
 global idt_init
 global isr_common_entry
+global idt_table
+global idtr
 extern sched_pending
 extern sched_do_switch
 
@@ -14,11 +16,11 @@ section .text
 
 ; Build one IDT gate (interrupt gate, 32-bit, present, DPL=0)
 ; in: eax = handler address, edi = &idt[n]
-%macro IDT_SET_GATE 0
+%macro IDT_SET_GATE 1
     mov word [edi + 0], ax                 ; offset[15:0]
     mov word [edi + 2], GDT_SEL_KCODE      ; selector
     mov byte [edi + 4], 0                  ; zero
-    mov byte [edi + 5], 10001110b          ; P=1,DPL=0,32-bit interrupt gate
+    mov byte [edi + 5], %1
     shr eax, 16
     mov word [edi + 6], ax                 ; offset[31:16]
 %endmacro
@@ -31,11 +33,24 @@ idt_init:
 .init_loop:         ; for each IDT entry...
     mov eax, [isr_stub_table + ebx*4]   ; get the handler address for this vector
     lea edi, [idt_table + ebx*8]        ; get the address of the current IDT entry (8 bytes each)
-    IDT_SET_GATE    ; macro sets up the gate for this vector in the IDT
-    inc ebx         ; next vector
-    cmp ebx, 256    ; loop until all 256 vectors are set up
+    IDT_SET_GATE 10001110b             ; P=1,DPL=0,32-bit interrupt gate
+    inc ebx                             ; next vector
+    cmp ebx, 128                        ; 128 is a special exception, so we jump if we're there
+    je .init_syscall
+    cmp ebx, 256                        ; loop until all 256 vectors are set up
     jl .init_loop
+    jmp .loadidt
+.init_syscall:
+    ; Syscall gate is vector 0x80 (128), DPL=3 so user code can invoke it.
+    ; POSSIBLE TODO: Patch IDT in C code instead of hardcoding here. At the moment,
+    ; this is the only DPL3 gate we have, so this is what we will use for now
+    mov eax, [isr_stub_table + 128*4]   ; get syscall handler address
+    lea edi, [idt_table + 128*8]        ; get address of IDT entry for vector 128
+    IDT_SET_GATE 11101110b             ; P=1,DPL=3,32-bit interrupt gate
+    inc ebx
+    jmp .init_loop
 
+.loadidt:
     lidt [idtr]     ; load the IDT with this new table
     popad           ; restore GP registers and return
     ret

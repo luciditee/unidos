@@ -7,6 +7,8 @@
 #define GDT_SEL_KCODE 0x08
 #define GDT_SEL_KDATA 0x10
 
+#define STACK_PAGE_SIZE 16
+
 #define HALT_FOREVER for (;;) __asm__ __volatile__("hlt")
 
 typedef struct trap_tail {
@@ -40,7 +42,8 @@ void kdbg_puts(const char* s, uint32_t attr);
 void kdbg_hex32(uint32_t value, uint32_t attr);
 uint32_t kdbg_get_cursor_linear(void);
 
-void kmain(uint32_t kparam_ptr, uint32_t kparam_length);
+void kmain();
 
 extern const uint32_t __kernel_start;
 extern const uint32_t __kernel_end;
+extern const uint32_t g_stack_virt_addr;

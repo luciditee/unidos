@@ -140,10 +140,10 @@ Note: 5.3 and 5.4 items may be implemented in parallel with milestone 6. They ar
 	- [ ] User fault => kill offending process
 
 ### 5.4 Higher-Half Refactor
-- [ ] Linker script updated to reflect kernel image copy to high memory
-- [ ] .bss section explicitly zeroed in kernel init assembly
-- [ ] PMM frames and VMM pages reserved for kernel code and kernel stack, with [ ] guard page at end of stack (with value definable as N pages, default 4 e.g. 16KiB of stack space, likely more in practical use)
-- [ ] Kernel remapped to new region and far jump handled accordingly
+- [X] Linker script updated to reflect kernel image copy to high memory
+- [X] .bss section explicitly zeroed in kernel init assembly
+- [X] PMM frames and VMM pages reserved for kernel code and kernel stack, with [ ] guard page at end of stack (with value definable as N pages, default 4 e.g. 16KiB of stack space, likely more in practical use)
+- [X] Kernel remapped to new region and far jump handled accordingly
 
 Exit criteria:
 - Kernel runs with paging on.
@@ -166,6 +166,17 @@ Goal: support ring 3 processes safely.
 
 Exit criteria:
 - A trivial ring3 test program can invoke syscall and return/exit without panic.
+
+### Syscall ABI
+
+System calls are activated via `int 0x80` (the `sysenter` and `syscall` instructions are unavailable prior to i686, and we are minspec'd to 80386 for now).
+
+- On any system interrupt, the standard trap frame `trap_frame_t` passes the interrupt vector, which is parsed by the ISR. If the vector in the trap frame is `0x80`, the syscall handler is invoked.
+- From there, the contents of `eax` are read to decode which system call is being emitted (`0`/`read`, `1`/`write`, `2`/`open`, etc.) and the syscall table is used to decode exact values and the C function pointers they map to.
+- Callers are also expected to populate GP registers `ebx`, `ecx`, `edx`, `esi`, `edi`, `ebp` with parameters for the C function that ultimately runs (in that order).
+- Return values from the functions are placed back into `eax` when control returns from the C function to the `int 0x80` ISR stub, and `iret` returns control to the userspace program which initiated the system call.
+
+Note: On return, only `eax` is guaranteed to contain a useful value -- other GP registers may be clobbered or undefined.
 
 ---
 

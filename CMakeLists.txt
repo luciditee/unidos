@@ -51,6 +51,9 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/kmem.c
   ${CMAKE_SOURCE_DIR}/kernel/paging.c
   ${CMAKE_SOURCE_DIR}/kernel/kremap.c
+  ${CMAKE_SOURCE_DIR}/kernel/panic.c
+  ${CMAKE_SOURCE_DIR}/kernel/syscall.c
+  ${CMAKE_SOURCE_DIR}/kernel/errno.c
 )
 
 set(KERNEL_INCLUDE_DIRS

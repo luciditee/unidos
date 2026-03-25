@@ -5,18 +5,39 @@
 #include "bootinfo.h"
 #include "paging.h"
 
+// Helper macro -- 1024 entries per page table.
 #define PT_MAX 1024 // max PDE/PT slots in non-PAE 32-bit paging
+
+// Helper macro -- Vector for page fault.
 #define PF_VECTOR 0x0E
 
+// Physical addresses of our page directory and page tables.
 static volatile uint32_t page_directory_loc_phys = 0;
+
+// Array of physical addresses of page tables, indexed by PDE index.
 static volatile uint32_t page_tables_loc_phys[PT_MAX] = {0};
+
+// Quantity of page tables currently in use (guaranteed <= PT_MAX)
 static volatile uint32_t page_table_count = 0;
 
+// Forward declarations for helper functions defined in PMM that get used by
+// paging but no other part of the kernel
+
+// Reserves a specific range of frames into the global mem_regions_t array.
 extern paging_status_t pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* out_reserved, uint32_t* out_count, bool clear);
+
+// Reserves a specific range of frames into the global mem_regions_t array.
 extern paging_status_t pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear);
 
+// Page fault handler for debugging purposes. Installed in IDT at PF_VECTOR.
+// Will later be used for implementing demand paging/lazy loading of pages
 static void on_pagefault(trap_frame_t* tf);
 
+// Initializes the paging manager with identity mapping.
+// Loads CR3 with physical address of page directory (page_directory_loc_phys).
+// Returns the physical address of the page directory on success, 0 on failure.
+// If failure, and if out_status is not null, out_status will contain status code
+// indicating nature of failure.
 uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status) {
     if (identity_bytes % 4096 != 0) {
         if (out_status) 
@@ -43,20 +64,29 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
     uint32_t needed_frames = ((identity_bytes >> 22) + ((identity_bytes & 0x3FFFFF) ? 1 : 0)) + 1;
     uint32_t needed_pts = needed_frames - 1;
 
-    // needed_frames includes one frame for PD + needed_pts frames for PTs
-    if (needed_frames > (PT_MAX + 1)) {
+    // Reserve one additional PT for bootstrap higher-half kernel mapping
+    // (KERNEL_VIRTUAL_BASE window), so the current execution context remains
+    // mapped when CR3 is switched to this new PD.
+    //
+    // Reserve N additional PTs for a permanent physical-memory window at
+    // PHYS_WINDOW_BASE, where N matches the number of identity PTs.
+    uint32_t physwin_pts = needed_pts;
+    uint32_t needed_frames_total = needed_frames + 1 + physwin_pts;
+
+    // needed_frames_total includes one frame for PD + identity PTs + 1 high PT
+    if (needed_frames_total > (PT_MAX + 1)) {
         if (out_status)
             *out_status = PAGING_ERR_EXCESS_PAGES_REQUESTED;
         return 0;
     }
     uint32_t reserved_frames[PT_MAX + 1] = {0};
-    uint32_t remaining = needed_frames;
+    uint32_t remaining = needed_frames_total;
     kdbg_puts("reserving ", 0x0A);
-    kdbg_hex32(needed_frames, 0x0A);
+    kdbg_hex32(needed_frames_total, 0x0A);
     kdbg_puts(" page frames for paging structures", 0x0A);
     while (remaining > 0) {
         uint32_t reserved_this_round = 0;
-        int res = pmm_reserve_pageframe_seq(remaining, reserved_frames + (needed_frames - remaining), &reserved_this_round, true);
+        int res = pmm_reserve_pageframe_seq(remaining, reserved_frames + (needed_frames_total - remaining), &reserved_this_round, true);
         if (res != PAGING_OK || reserved_this_round == 0) {
             if (out_status)
                 *out_status = PAGING_ERR_INIT_RESERVE_FAILED;
@@ -90,6 +120,54 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
         pd[pdi] = pt_phys | PG_PRESENT | PG_RW; // map PDE[pdi] to PT[pdi]
     }
     page_table_count = needed_pts;
+
+    // Install one bootstrap high-half PT so higher-half linked kernel code
+    // remains executable after CR3 switch.
+    uint32_t hi_pt_phys = reserved_frames[needed_pts + 1];
+    page_tables_loc_phys[KERNEL_VIRTUAL_BASE >> 22] = hi_pt_phys;
+    pd[KERNEL_VIRTUAL_BASE >> 22] = hi_pt_phys | PG_PRESENT | PG_RW;
+    page_table_count++;
+
+    uint32_t* hi_pt = (uint32_t*)hi_pt_phys;
+    for (uint32_t i = 0; i < 1024; i++) {
+        hi_pt[i] = 0;
+    }
+
+    uint32_t kernel_phys_start = ((uint32_t)&__kernel_start) & 0xFFFFF000;
+    uint32_t kernel_phys_end = (((uint32_t)&__kernel_end) + 0xFFF) & 0xFFFFF000;
+    uint32_t kernel_bytes = kernel_phys_end - kernel_phys_start;
+    uint32_t kernel_pages = kernel_bytes >> 12;
+
+    if (kernel_pages > 1024) {
+        if (out_status) *out_status = PAGING_ERR_EXCESS_PAGES_REQUESTED;
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < kernel_pages; i++) {
+        hi_pt[i] = (kernel_phys_start + (i << 12)) | PG_PRESENT | PG_RW;
+    }
+
+    // Install a permanent physical-memory window at PHYS_WINDOW_BASE.
+    // Each PT covers 4MiB, mirroring the same span as identity_bytes.
+    uint32_t physwin_pdi_base = (PHYS_WINDOW_BASE >> 22);
+    for (uint32_t p = 0; p < physwin_pts; p++) {
+        uint32_t pt_phys = reserved_frames[needed_pts + 2 + p];
+        uint32_t pdi = physwin_pdi_base + p;
+        if (pdi >= PT_MAX) {
+            if (out_status) *out_status = PAGING_ERR_EXCESS_PAGES_REQUESTED;
+            return 0;
+        }
+
+        page_tables_loc_phys[pdi] = pt_phys;
+        pd[pdi] = pt_phys | PG_PRESENT | PG_RW;
+        page_table_count++;
+
+        uint32_t* pt = (uint32_t*)pt_phys;
+        uint32_t phys_base = p << 22; // each PT maps 4MiB
+        for (uint32_t i = 0; i < 1024; i++) {
+            pt[i] = (phys_base + (i << 12)) | PG_PRESENT | PG_RW;
+        }
+    }
 
     // init page tables for identity mapping
     uint32_t pages_mapped = (identity_bytes + 0xFFF) >> 12; // round to nearest page
@@ -133,10 +211,14 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
     return page_directory_loc_phys;
 }
 
+// Helper which obtains the PD location *after* higher-half remap.
 volatile uint32_t* pd_ptr() {
-    return (volatile uint32_t*)page_directory_loc_phys;
+    return (volatile uint32_t*)PHYS_TO_VIRT(page_directory_loc_phys);
 }
 
+// Helper which obtains a pointer to the PD for a given PD index, to be
+// used after higher-half remap. Returns null if PDE is not present or 
+// index is out-of-bounds.
 volatile uint32_t* pt_ptr_from_pdi(uint32_t pdi) {
     
     // TODO: may be able to recover PT phys from & 0xFFFFF000 of PDE,
@@ -146,7 +228,7 @@ volatile uint32_t* pt_ptr_from_pdi(uint32_t pdi) {
         return NULL; // out of bounds or not mapped
     if ((pd_ptr()[pdi] & PG_PRESENT) == 0)
         return NULL; // not present in PD
-    return (volatile uint32_t*)page_tables_loc_phys[pdi];
+    return (volatile uint32_t*)PHYS_TO_VIRT(page_tables_loc_phys[pdi]);
 }
 
 volatile uint32_t* pt_ptr_from_virt(uint32_t virt) {
@@ -154,6 +236,7 @@ volatile uint32_t* pt_ptr_from_virt(uint32_t virt) {
     return pt_ptr_from_pdi(pdi);
 }
 
+// Flushes entire TLB by reloading CR3 with itself.
 void paging_flush_tlb() {
     uint32_t ptbase;
     __asm__ __volatile__ (
@@ -167,6 +250,8 @@ void paging_flush_tlb() {
     );  
 }
 
+// Flushes a single page from TLB (but only on platforms which support
+// INVLPG instruction). On 80386, alias for full TLB flush.
 void paging_flush_tlb_single(uint32_t virt_addr) {
     #ifdef INVLPG_AVAILABLE
     __asm__ __volatile__ (
@@ -185,10 +270,14 @@ void paging_flush_tlb_single(uint32_t virt_addr) {
     #endif
 }
 
+// Returns whether or not paging manager is initialized.
 bool is_paging_ready() {
     return page_directory_loc_phys != 0 && pd_ptr() != NULL;
 }
 
+// Returns a status code indicating whether or not the given virtual address
+// could successfully be queried. If so, out_result (if present) is populated
+// with details of the mapping. If not, out_result is zeroed out.
 paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out_result) {
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
@@ -230,6 +319,8 @@ paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out
     return PAGING_OK;
 }
 
+// Maps a single page with the given virtual address, physical address, and flags.
+// Returns status code indicating success or nature of failure.
 paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags, uint32_t* out_addr) {
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
@@ -241,15 +332,15 @@ paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t
     uint32_t pdi = (virt_addr >> 22) & 0x3FF;
     uint32_t pti = (virt_addr >> 12) & 0x3FF;
 
-    uint32_t* pd = (uint32_t*)page_directory_loc_phys;
+    volatile uint32_t* pd = pd_ptr();
     if ((pd[pdi] & PG_PRESENT) == 0) {
         // Need to allocate a new page table for this PDE
         if (page_table_count >= PT_MAX)
             return PAGING_ERR_NOMEM; // no more page tables available
 
-        uint32_t new_pt_phys = 0;
-        int res = pmm_reserve_pageframe(&new_pt_phys, true);
-        if (res != PAGING_OK)
+        pmm_alloc_result_t res;
+        uint32_t new_pt_phys = pmm_get_next_available_block(&res);
+        if (res != PMM_ALLOC_SUCCESS)
             return PAGING_ERR_NOMEM; // failed to reserve frame for new PT
 
         // Note: caller must pass PG_USER if user-accessible page is desired
@@ -276,6 +367,8 @@ paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t
     return PAGING_OK;
 }
 
+// Unmaps the given virtual address. If out_phys_addr is not null, it is set to
+// the physical address which is no longer mapped.
 paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
     if (page_directory_loc_phys == 0) {
         if (out_phys_addr) *out_phys_addr = 0;
@@ -294,7 +387,7 @@ paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
     uint32_t pti = (virt_addr >> 12) & 0x3FF;
 
     // Ensure directory exists
-    uint32_t* pd = (uint32_t*)page_directory_loc_phys;
+    volatile uint32_t* pd = pd_ptr();
     if (!pd) {
         if (out_phys_addr) *out_phys_addr = 0;
         return PAGING_ERR_NOT_INITIALIZED;
@@ -321,8 +414,9 @@ paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
     }
 
     // If here, the page is present and mapped, and can be unmapped
+    uint32_t phys = pt[pti] & 0xFFFFF000;
     if (out_phys_addr)
-        *out_phys_addr = pt[pti] & 0xFFFFF000; // return physical address of unmapped page
+        *out_phys_addr = phys; // return physical address of unmapped page
 
     pt[pti] = 0; // unmap page by clearing PTE
 
@@ -335,6 +429,29 @@ paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
     return PAGING_OK;
 }
 
+// Unmaps the given virtual address *and* frees the corresponding physical frame
+// back to the PMM. Returns status code indicating success or nature of failure.
+paging_status_t paging_unmap_and_free_page(uint32_t virt_addr) {
+    uint32_t phys;
+    paging_status_t res = paging_unmap_page(virt_addr, &phys);
+    if (res != PAGING_OK)
+        return res;
+    
+    if (phys != 0) {
+        // Free the physical frame mapped to this virtual address
+        pmm_dealloc_specific_block(phys);
+        return PAGING_OK;
+    } else {
+        // phys == 0 means the page was not actually mapped
+        // In practice, this should not be reached since we check for
+        // PAGING_OK above
+        return PAGING_ERR_NOT_MAPPED;
+    }
+}
+
+// Sets the flags of the given virtual address's page to the provided flags 
+// (while keeping the same physical address mapping). Returns status code
+// indicating success or nature of failure.
 paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags) {
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
@@ -346,7 +463,7 @@ paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags) {
     uint32_t pdi = (virt_addr >> 22) & 0x3FF;
     uint32_t pti = (virt_addr >> 12) & 0x3FF;
 
-    uint32_t* pd = (uint32_t*)page_directory_loc_phys;
+    volatile uint32_t* pd = pd_ptr();
     if ((pd[pdi] & PG_PRESENT) == 0)
         return PAGING_ERR_NOT_MAPPED; // not present in PD
 
@@ -369,6 +486,9 @@ paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags) {
     return PAGING_OK;
 }
 
+// Simple unit test for paging manager which uses PMM reserved regions to perform test.
+// Not an exhaustive test, simply a thin sanity check to confirm basics.
+// TODO: Expand or remove test suite.
 void test_paging() {
     // Example test: reserve one free frame, map it to a virtual address,
     // query that virtual address, validate that it maps to the input frame address.
@@ -512,13 +632,15 @@ void test_paging() {
     return;
 }
 
-
+// Returns the value of the CR2 register, which contains the linear address
+// that caused the most recent page fault. To be used by #PF handler.
 static inline uint32_t read_cr2(void) {
     uint32_t v;
     __asm__ __volatile__("movl %%cr2, %0" : "=r"(v));
     return v;
 }
 
+// Page fault handler for debugging purposes. Registered in IDT at PF_VECTOR.
 static void on_pagefault(trap_frame_t* tf) {
     uint32_t err = tf->error; 
     uint32_t cr2 = read_cr2();
