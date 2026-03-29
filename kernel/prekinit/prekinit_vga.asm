@@ -28,6 +28,7 @@
 
 global vgatext.get_cursor_eax
 global vgatext.puts
+global vgatext.putsn
 global vgatext.putch
 global vgatext.set_cursor_linear
 global vgatext.set_cursor_enabled
@@ -50,6 +51,32 @@ vgatext:
     jmp ._puts_next             ; loop to print next character
 ._puts_done:                    
     pop eax                     ; restore registers and return
+    pop esi
+    ret
+
+.putsn:     ; Input: ESI=pointer to null-terminated string, or NULL
+            ; DL=VGA attribute byte for entire string
+            ; ECX=length of string to print (excluding null terminator)
+            ; Prints to null terminator or length, whichever comes first
+    push esi                    ; preserve ESI, EAX, ECX on stack
+    push eax                    
+    push ecx
+    test esi, esi
+    jz ._putsn_done              ; if ESI is NULL, do nothing and return
+    cld                         ; ensure string operations use forward direction
+._putsn_next:
+    lodsb                       ; load byte at ESI into AL, increment ESI
+    test al, al                 ; test if done (null terminator)
+    jz ._putsn_done              ; jump to done if so
+    test ecx, ecx               ; test if we've printed requested length
+    jz ._putsn_done
+    mov ah, dl                  ; move attribute byte into AH for putch consumption
+    call .putch                 ; print character AL=char AH=attr
+    dec ecx                     ; decrement remaining length
+    loop ._putsn_next           ; loop to print next character
+._putsn_done:                    
+    pop ecx                     ; restore registers and return
+    pop eax
     pop esi
     ret
 

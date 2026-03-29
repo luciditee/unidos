@@ -3,6 +3,7 @@
 // Essentially a copy of the Linux x86 errno.h, pared back to just error codes
 // I expect to be used in this kernel
 typedef enum errno {
+    ESUCCESS        = 0x00, // Success
     EPERM           = 0x01, // Operation not permitted
     ENOENT          = 0x02, // No such file or directory
     ESRCH           = 0x03, // No such process

@@ -20,6 +20,15 @@ static task_t list[MAX_THREADS] = {0};
 static void task_bootstrap(void);
 static void sched_on_int81h(trap_frame_t* tf);
 static void sched_idle(void);
+extern uint8_t tss32;
+
+static inline void sched_set_tss_esp0(task_t* t) {
+    if (!t) return;
+    volatile uint32_t* esp0 = (volatile uint32_t*)((uintptr_t)&tss32 + 4);
+    volatile uint16_t* ss0  = (volatile uint16_t*)((uintptr_t)&tss32 + 8);
+    *esp0 = (uint32_t)(uintptr_t)(t->stack + TASK_STACK_SIZE);
+    *ss0 = GDT_SEL_KDATA;
+}
 
 static task_t* alloc_slot(void) {
     for (size_t i = 0; i < MAX_THREADS; i++) {
@@ -228,10 +237,12 @@ uint32_t sched_do_switch(uint32_t old_esp) {
 
     if (!current) {
         current = next_runnable(head);
+        if (current) sched_set_tss_esp0(current);
         return current ? current->saved_esp : old_esp;
     }
 
     current = next_runnable(current->next);
+    if (current) sched_set_tss_esp0(current);
     return current ? current->saved_esp : old_esp;
 }
 
@@ -244,6 +255,12 @@ void sched_task_exit(int code) {
     current->state = DEAD;
 
     irq_restore(flags);
+
+    kdbg_puts("Task ", 0x0C); 
+    kdbg_hex32((uint32_t)current, 0x0C); 
+    kdbg_puts(" exited with code ", 0x0C); 
+    kdbg_hex32(code, 0x0C); 
+    kdbg_puts("\r\n", 0x0C);
 
     sched_task_yield();
     for (;;) __asm__ __volatile__ ("hlt");
@@ -301,6 +318,14 @@ static void task_bootstrap(void) {
     for (;;) { __asm__ __volatile__("hlt"); }
 }
 
+void task_kill_current(const char* reason, const size_t code) {
+    kdbg_puts("Killing task ", 0x0C); kdbg_hex32((uint32_t)current, 0x0C);
+    kdbg_puts(": ", 0x0C); kdbg_puts(reason, 0x0C);
+    kdbg_puts(" (code ", 0x0C); kdbg_hex32(code, 0x0C); kdbg_puts(")\r\n", 0x0C);
+
+    sched_task_exit(code);
+}
+
 static void sched_on_int81h(trap_frame_t* tf) {
     // Note: common ISR handler stub triggers the scheduler on return,
     // so this function is a no-op.
@@ -308,8 +333,12 @@ static void sched_on_int81h(trap_frame_t* tf) {
 }
 
 static void sched_idle() {
-    for (;;) {
+    /*for (;;) {
         __asm__ __volatile__("sti");
         __asm__ __volatile__("hlt");
+    }*/
+    for (;;) {
+        kdbg_puts("Idle\r\n", 0x0B);
+        for (volatile int i = 0; i < 400000000; i++); // burn cycles
     }
 }

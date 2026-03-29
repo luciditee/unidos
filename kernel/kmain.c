@@ -8,6 +8,8 @@
 #include "include/sched.h"
 #include "kmem.h"
 #include "kremap.h"
+#include "exception.h"
+#include "include/syscall.h"
 
 static void on_int3(trap_frame_t* tf) {
     (void)tf;
@@ -77,18 +79,21 @@ void ktrampoline() {
 void kmain() {
     kdbg_puts("Entered kmain\r\n", 0x0F);
 
+    exception_init();
     pic_remap();
     pit_init();    
     test_paging();
     kb_init();
     sched_init();
-    //isr_register(3, on_int3);
+    syscall_init();
     __asm__ __volatile__ ("sti");
+
+    sched_add_task(syscall_test);
 
     //trigger_intentional_page_fault();
 
-    sched_add_task(test_task1);
-    sched_add_task(test_task2);
+    //sched_add_task(test_task1);
+    //sched_add_task(test_task2);
     //sched_add_task(test_task2); // test multiple instances
     /*sched_add_task(test_task3);
     sched_add_task(test_task4);

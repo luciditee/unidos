@@ -4,6 +4,7 @@
 #include "isr.h"
 #include "bootinfo.h"
 #include "paging.h"
+#include "panic.h"
 
 // Helper macro -- 1024 entries per page table.
 #define PT_MAX 1024 // max PDE/PT slots in non-PAE 32-bit paging
@@ -28,10 +29,6 @@ extern paging_status_t pmm_reserve_pageframe_seq(uint32_t requested, uint32_t* o
 
 // Reserves a specific range of frames into the global mem_regions_t array.
 extern paging_status_t pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear);
-
-// Page fault handler for debugging purposes. Installed in IDT at PF_VECTOR.
-// Will later be used for implementing demand paging/lazy loading of pages
-static void on_pagefault(trap_frame_t* tf);
 
 // Initializes the paging manager with identity mapping.
 // Loads CR3 with physical address of page directory (page_directory_loc_phys).
@@ -185,9 +182,6 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
         pt[tableIndex] = ((i << 12) & 0xFFFFF000) | PG_PRESENT | PG_RW; 
     }
 
-    // Register page fault handler
-    isr_register(PF_VECTOR, on_pagefault);
-
     // Load PD address into CR3, set CR0.PG to enable paging
     __asm__ __volatile__ (
         "movl %0, %%cr3\n"
@@ -282,6 +276,9 @@ paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
 
+    if (get_current_cpl() != CPL_KERNEL)
+        panic("paging_query_page called from non-kernel context", NULL);
+
     uint32_t pdi = (virt_addr >> 22) & 0x3FF;
     uint32_t pti = (virt_addr >> 12) & 0x3FF;
 
@@ -322,17 +319,27 @@ paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out
 // Maps a single page with the given virtual address, physical address, and flags.
 // Returns status code indicating success or nature of failure.
 paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags, uint32_t* out_addr) {
+    if (get_current_cpl() != CPL_KERNEL)
+        panic("paging_map_page called from non-kernel context", NULL);
+    
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
 
     if ((virt_addr & 0xFFF) != 0 || (phys_addr & 0xFFF) != 0) {
         return PAGING_ERR_ALIGN;
     }
+    
+    if (virt_addr >= KERNEL_VIRTUAL_BASE && (flags & PG_USER) != 0) {
+        return PAGING_ERR_USER_FLAG_IN_KERNEL_SPACE; // can't set user flag on kernel address
+    } else if (virt_addr < KERNEL_VIRTUAL_BASE && (flags & PG_USER) == 0) {
+        return PAGING_ERR_KERNEL_FLAG_IN_USER_SPACE; // user flag must match between PDE and PTE, so if clearing user flag, address must be in user space
+    }
 
     uint32_t pdi = (virt_addr >> 22) & 0x3FF;
     uint32_t pti = (virt_addr >> 12) & 0x3FF;
 
     volatile uint32_t* pd = pd_ptr();
+
     if ((pd[pdi] & PG_PRESENT) == 0) {
         // Need to allocate a new page table for this PDE
         if (page_table_count >= PT_MAX)
@@ -348,6 +355,13 @@ paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t
         pd[pdi] = new_pt_phys | user | PG_PRESENT | PG_RW; // map PDE to new PT
         page_tables_loc_phys[pdi] = new_pt_phys;
         page_table_count++;
+    } else {
+        // If we're allocating a user page, and we're hitting a PDE that isn't
+        // for the user, that's a problem and we shouldn't commit to mapping it.
+        if (flags & PG_USER) {
+            if ((pd[pdi] & PG_USER) == 0)
+                return PAGING_ERR_PT_USER_FLAG_MISMATCH; // can't set user flag if PDE isn't user-accessible
+        }
     }
 
     volatile uint32_t* pt = pt_ptr_from_pdi(pdi);
@@ -370,6 +384,9 @@ paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t
 // Unmaps the given virtual address. If out_phys_addr is not null, it is set to
 // the physical address which is no longer mapped.
 paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
+    if (get_current_cpl() != CPL_KERNEL)
+        panic("paging_unmap_page called from non-kernel context", NULL);
+    
     if (page_directory_loc_phys == 0) {
         if (out_phys_addr) *out_phys_addr = 0;
         return PAGING_ERR_NOT_INITIALIZED;
@@ -432,6 +449,9 @@ paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr) {
 // Unmaps the given virtual address *and* frees the corresponding physical frame
 // back to the PMM. Returns status code indicating success or nature of failure.
 paging_status_t paging_unmap_and_free_page(uint32_t virt_addr) {
+    if (get_current_cpl() != CPL_KERNEL)
+        panic("paging_unmap_and_free_page called from non-kernel context", NULL);
+
     uint32_t phys;
     paging_status_t res = paging_unmap_page(virt_addr, &phys);
     if (res != PAGING_OK)
@@ -453,11 +473,20 @@ paging_status_t paging_unmap_and_free_page(uint32_t virt_addr) {
 // (while keeping the same physical address mapping). Returns status code
 // indicating success or nature of failure.
 paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags) {
+    if (get_current_cpl() != CPL_KERNEL)
+        panic("paging_set_flags called from non-kernel context", NULL);
+    
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
 
     if (virt_addr & 0xFFF) {
         return PAGING_ERR_ALIGN;
+    }
+
+    if (virt_addr >= KERNEL_VIRTUAL_BASE && (flags & PG_USER) != 0) {
+        return PAGING_ERR_USER_FLAG_IN_KERNEL_SPACE; // can't set user flag on kernel address
+    } else if (virt_addr < KERNEL_VIRTUAL_BASE && (flags & PG_USER) == 0) {
+        return PAGING_ERR_KERNEL_FLAG_IN_USER_SPACE; // user flag must match between PDE and PTE, so if clearing user flag, address must be in user space
     }
 
     uint32_t pdi = (virt_addr >> 22) & 0x3FF;
@@ -516,7 +545,7 @@ void test_paging() {
     kdbg_puts("Mapping page frame A to test virtual address ", 0x0A);
     kdbg_hex32(test_virt, 0x0A);
     kdbg_puts("...\r\n", 0x0A);
-    res = paging_map_page(test_virt, physA, PG_RW, &addrOut);
+    res = paging_map_page(test_virt, physA, PG_RW | PG_USER, &addrOut);
 
     if (res != PAGING_OK) {
         kdbg_puts("Failed to map page frame for testing paging (code ", 0x0C);
@@ -538,7 +567,7 @@ void test_paging() {
 
 
     // Set flags to read-only by using paging_set_flags with PG_RW cleared. This should update the flags in-place without changing the physical address mapping.
-    res = paging_set_flags(test_virt, PG_PRESENT); // set flags to PG_PRESENT only
+    res = paging_set_flags(test_virt, PG_PRESENT | PG_USER); // set flags to PG_PRESENT only (user-accessible)
     if (res != PAGING_OK) {
         kdbg_puts("Failed to remap page frame for testing paging (code ", 0x0C);
         kdbg_hex32(res, 0x0C);  
@@ -603,7 +632,7 @@ void test_paging() {
     kdbg_puts("0x", 0x0A); kdbg_hex32(physB, 0x0A); kdbg_puts("\r\n", 0x0A);
 
     kdbg_puts("Remapping test virtual address to page frame B... ", 0x0A);
-    res = paging_map_page(test_virt, physB, PG_RW, &addrOut);
+    res = paging_map_page(test_virt, physB, PG_RW | PG_USER, &addrOut);
     if (res != PAGING_OK) {
         kdbg_puts("Failed to remap page frame to different physical address for testing paging (code ", 0x0C);
         kdbg_hex32(res, 0x0C);
@@ -630,33 +659,4 @@ void test_paging() {
 
     kdbg_puts("Paging test completed successfully\r\n", 0x0A);
     return;
-}
-
-// Returns the value of the CR2 register, which contains the linear address
-// that caused the most recent page fault. To be used by #PF handler.
-static inline uint32_t read_cr2(void) {
-    uint32_t v;
-    __asm__ __volatile__("movl %%cr2, %0" : "=r"(v));
-    return v;
-}
-
-// Page fault handler for debugging purposes. Registered in IDT at PF_VECTOR.
-static void on_pagefault(trap_frame_t* tf) {
-    uint32_t err = tf->error; 
-    uint32_t cr2 = read_cr2();
-
-    // 386-relevant bits
-    uint32_t present = (err & 0x1);        // 0: not-present, 1: protection violation
-    uint32_t write   = (err >> 1) & 0x1;   // 0: read, 1: write
-    uint32_t user    = (err >> 2) & 0x1;   // 0: supervisor, 1: user
-
-    kdbg_puts("#PF: cr2=", 0x0C); kdbg_hex32(cr2, 0x0C);
-    kdbg_puts(" err=", 0x0C);      kdbg_hex32(err, 0x0C);
-    kdbg_puts(" P=", 0x0C);        kdbg_hex32(present, 0x0C);
-    kdbg_puts(" W=", 0x0C);        kdbg_hex32(write, 0x0C);
-    kdbg_puts(" U=", 0x0C);        kdbg_hex32(user, 0x0C);
-    kdbg_puts("\r\n", 0x0C);
-
-    kdbg_dump_current();
-    HALT_FOREVER;
 }

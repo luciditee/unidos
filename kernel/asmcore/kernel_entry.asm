@@ -149,6 +149,8 @@ kernel:
     ; Point stack to high-half before unconditional jump to kmain
     mov eax, [g_stack_virt_addr]
     mov esp, eax
+    mov [tss32 + 4], eax                ; Update TSS ESP0 to point to new stack in case of ring3->ring0 switch
+    mov word [tss32 + 8], GDT_SEL_KDATA ; Update TSS SS0 as well
     jmp kmain
 
 section .text

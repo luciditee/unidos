@@ -38,6 +38,8 @@ set(STAGE2_SRC ${CMAKE_SOURCE_DIR}/boot/stage2/stage2.asm)
 set(KERNEL_ASM_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/asmcore/kernel_entry.asm
   ${CMAKE_SOURCE_DIR}/kernel/asmcore/c_abi.asm
+  ${CMAKE_SOURCE_DIR}/kernel/asmcore/usermode_test.asm
+  ${CMAKE_SOURCE_DIR}/kernel/asmcore/usermode_entry.asm
 )
 
 set(KERNEL_C_SOURCES
@@ -54,6 +56,11 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/panic.c
   ${CMAKE_SOURCE_DIR}/kernel/syscall.c
   ${CMAKE_SOURCE_DIR}/kernel/errno.c
+  ${CMAKE_SOURCE_DIR}/kernel/exception.c
+  ${CMAKE_SOURCE_DIR}/kernel/uaccess.c
+  ${CMAKE_SOURCE_DIR}/kernel/sys/exit.c
+  ${CMAKE_SOURCE_DIR}/kernel/sys/write.c
+  ${CMAKE_SOURCE_DIR}/kernel/sys/yield.c
 )
 
 set(KERNEL_INCLUDE_DIRS
@@ -62,12 +69,17 @@ set(KERNEL_INCLUDE_DIRS
 
 set(KERNEL_LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/kernel/linker.ld)
 set(KPARAMS_DEFAULT_SRC ${CMAKE_SOURCE_DIR}/kernel/kparams.default.dat)
+set(USERMODE_TEST_SRC ${CMAKE_SOURCE_DIR}/user/syscalltest.c)
+set(USERMODE_TEST_LINK_ADDR 0x40000000 CACHE STRING "Virtual load address used when linking the embedded usermode syscall test program")
 
 set(STAGE1_BIN ${UNIDOS_OUT_DIR}/stage1.bin)
 set(STAGE2_BIN ${UNIDOS_OUT_DIR}/stage2.bin)
 set(KERNEL_ELF ${UNIDOS_OUT_DIR}/kernel.elf)
 set(KERNEL_BIN ${UNIDOS_OUT_DIR}/kernel.bin)
 set(KERNEL_OBJ_DIR ${UNIDOS_OUT_DIR}/kernel_obj)
+set(USERMODE_TEST_OBJ ${UNIDOS_OUT_DIR}/usermode_test.o)
+set(USERMODE_TEST_ELF ${UNIDOS_OUT_DIR}/usermode_test.elf)
+set(USERMODE_TEST_BIN ${UNIDOS_OUT_DIR}/usermode_test.bin)
 set(FLOPPY_IMG ${UNIDOS_OUT_DIR}/floppy.img)
 set(NASM_BOOT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/boot/)
 set(NASM_KERNEL_INCLUDE_DIRS
@@ -122,11 +134,62 @@ set(NASM_KERNEL_INCLUDE_FLAGS)
 foreach(NASM_KERNEL_INCLUDE_DIR IN LISTS NASM_KERNEL_INCLUDE_DIRS)
   list(APPEND NASM_KERNEL_INCLUDE_FLAGS -i${NASM_KERNEL_INCLUDE_DIR})
 endforeach()
+list(APPEND NASM_KERNEL_INCLUDE_FLAGS -i${UNIDOS_OUT_DIR}/)
+
+add_custom_command(
+  OUTPUT ${USERMODE_TEST_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${UNIDOS_OUT_DIR}
+  COMMAND ${CMAKE_C_COMPILER}
+          -m32
+          -ffreestanding
+          -fno-stack-protector
+          -fno-pie
+          -march=i386
+          -nostdlib
+          -nostartfiles
+          -Wall
+          -Wextra
+          -MMD
+          -MF ${USERMODE_TEST_OBJ}.d
+          -c ${USERMODE_TEST_SRC}
+          -o ${USERMODE_TEST_OBJ}
+  DEPFILE ${USERMODE_TEST_OBJ}.d
+  DEPENDS ${USERMODE_TEST_SRC}
+  COMMENT "Compiling syscalltest.c"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${USERMODE_TEST_ELF}
+  COMMAND ${LD_EXECUTABLE}
+          -m elf_i386
+          -nostdlib
+          -N
+          -Ttext ${USERMODE_TEST_LINK_ADDR}
+          -e _start
+          -o ${USERMODE_TEST_ELF}
+          ${USERMODE_TEST_OBJ}
+  DEPENDS ${USERMODE_TEST_OBJ}
+  COMMENT "Linking usermode syscall test ELF"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${USERMODE_TEST_BIN}
+  COMMAND ${OBJCOPY_EXECUTABLE} -O binary ${USERMODE_TEST_ELF} ${USERMODE_TEST_BIN}
+  DEPENDS ${USERMODE_TEST_ELF}
+  COMMENT "Generating usermode syscall test binary"
+  VERBATIM
+)
 
 foreach(KERNEL_ASM_SOURCE IN LISTS KERNEL_ASM_SOURCES)
   get_filename_component(KERNEL_ASM_NAME_WE ${KERNEL_ASM_SOURCE} NAME_WE)
   set(KERNEL_ASM_OBJ ${KERNEL_OBJ_DIR}/${KERNEL_ASM_NAME_WE}.o)
   set(KERNEL_ASM_DEPFILE ${KERNEL_OBJ_DIR}/${KERNEL_ASM_NAME_WE}.d)
+  set(KERNEL_ASM_EXTRA_DEPS)
+  if(KERNEL_ASM_NAME_WE STREQUAL "usermode_test")
+    set(KERNEL_ASM_EXTRA_DEPS ${USERMODE_TEST_BIN})
+  endif()
 
   add_custom_command(
     OUTPUT ${KERNEL_ASM_OBJ}
@@ -142,7 +205,7 @@ foreach(KERNEL_ASM_SOURCE IN LISTS KERNEL_ASM_SOURCES)
             -o ${KERNEL_ASM_OBJ}
             ${KERNEL_ASM_SOURCE}
     DEPFILE ${KERNEL_ASM_DEPFILE}
-    DEPENDS ${KERNEL_ASM_SOURCE}
+    DEPENDS ${KERNEL_ASM_SOURCE} ${KERNEL_ASM_EXTRA_DEPS}
     COMMENT "Assembling ${KERNEL_ASM_NAME_WE}.asm"
     VERBATIM
   )

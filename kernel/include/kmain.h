@@ -6,6 +6,9 @@
 // between C and assembly without hardcoding
 #define GDT_SEL_KCODE 0x08
 #define GDT_SEL_KDATA 0x10
+#define GDT_SEL_UCODE 0x18
+#define GDT_SEL_UDATA 0x20
+#define GDT_SEL_TSS   0x28
 
 #define STACK_PAGE_SIZE 16
 
@@ -39,6 +42,7 @@ static inline int kmemcmp(const void* a, const void* b, size_t n) {
 void kdbg_dump_current(void);
 void kdbg_dump_frame(const trap_tail_t* tf);
 void kdbg_puts(const char* s, uint32_t attr);
+void kdbg_putsn(const char* s, uint32_t attr, uint32_t len);
 void kdbg_hex32(uint32_t value, uint32_t attr);
 uint32_t kdbg_get_cursor_linear(void);
 

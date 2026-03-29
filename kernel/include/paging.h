@@ -24,7 +24,9 @@ typedef enum {
     PAGING_ERR_NOT_INITIALIZED,
     PAGING_ERR_EXCESS_PAGES_REQUESTED,
     PAGING_ERR_INVALID,
-    PAGING_ERR_PT_USER_FLAG_MISMATCH
+    PAGING_ERR_PT_USER_FLAG_MISMATCH,
+    PAGING_ERR_USER_FLAG_IN_KERNEL_SPACE,
+    PAGING_ERR_KERNEL_FLAG_IN_USER_SPACE
 } paging_status_t;
 
 typedef struct {
@@ -70,6 +72,14 @@ static inline uint16_t page_offset(linear_addr_t la) {
 
 static inline bool is_page_aligned(uint32_t addr) {
     return (addr & 0xFFF) == 0;
+}
+
+// Returns the value of the CR2 register, which contains the linear address
+// that caused the most recent page fault. To be used by #PF handler.
+static inline uint32_t read_cr2(void) {
+    uint32_t v;
+    __asm__ __volatile__("movl %%cr2, %0" : "=r"(v));
+    return v;
 }
 
 // Creates PD/PTs, identity maps, loads CR3, sets CR0.PG

@@ -40,3 +40,4 @@ void sched_on_tick(void);
 void sched_task_exit(int code);
 void sched_task_sleep(uint64_t ticks);
 void sched_task_yield(void);
+void task_kill_current(const char* reason, const size_t code);

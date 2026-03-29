@@ -3,11 +3,19 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "paging.h"
+#include "kmain.h"
 
 #define MEM_REGIONS_MAX 256
 #define KERNEL_VIRTUAL_BASE 0xC0000000
-#define STACK_VIRTUAL_BASE 0xB0000000
+#define STACK_VIRTUAL_BASE 0xF7000000
 #define PHYS_WINDOW_BASE 0xD0000000
+
+_Static_assert((STACK_VIRTUAL_BASE & 0x003FFFFFu) == 0,
+    "STACK_VIRTUAL_BASE must be 4MiB PDE-aligned");
+
+#if (STACK_VIRTUAL_BASE < KERNEL_VIRTUAL_BASE) && ((STACK_VIRTUAL_BASE + (STACK_PAGE_SIZE << 12)) >= KERNEL_VIRTUAL_BASE)
+#warning "Kernel stack mapping range reaches or exceeds KERNEL_VIRTUAL_BASE; adjust STACK_VIRTUAL_BASE or STACK_PAGE_SIZE"
+#endif
 
 static inline uintptr_t phys_to_virt(uint32_t phys_addr) {
     return (uintptr_t)(PHYS_WINDOW_BASE + phys_addr);
@@ -20,12 +28,26 @@ static inline uintptr_t virt_to_phys(uint32_t virt_addr) {
 #define PHYS_TO_VIRT(pa) ((void*)phys_to_virt((uint32_t)(pa)))
 #define VIRT_TO_PHYS(va) ((uint32_t)virt_to_phys((uint32_t)(va)))
 
-inline bool is_user_vaddr(uint32_t virt_addr) {
+static inline bool is_user_vaddr(uint32_t virt_addr) {
     return virt_addr < KERNEL_VIRTUAL_BASE;
 }
 
-inline bool is_kernel_vaddr(uint32_t virt_addr) {
+static inline bool is_kernel_vaddr(uint32_t virt_addr) {
     return virt_addr >= KERNEL_VIRTUAL_BASE;
+}
+
+typedef enum cpl : uint16_t {
+    CPL_KERNEL = 0,
+    CPL_UNUSED1 = 1,
+    CPL_UNUSED2 = 2,
+    CPL_USER = 3
+} cpl_t;
+
+static inline cpl_t get_current_cpl() {
+    uint16_t cpl;
+    __asm__ __volatile__ ("mov %%cs, %0" : "=r" (cpl));
+    cpl &= 3;
+    return (cpl_t)cpl;
 }
 
 typedef enum {

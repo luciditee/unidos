@@ -67,9 +67,11 @@ isr_common_entry:
                     ; note: this happens throughout kernel code and is because
                     ; string ops are used everywhere, and we cannot be certain of
                     ; the state of EFLAGS.
-
+    push eax
     mov eax, cr2    ; copy CR2 to eax (later useful for #PF)
-    push eax        ; save CR2 on stack for isr_dispatch
+    xchg eax, [esp] ; eax needs to be preserved for syscalls
+
+    ; push eax        ; save CR2 on stack for isr_dispatch  (note: not needed anymore)
     push gs         ; note: all stack manipulation here and at the end of the common entry
     push fs         ; are to match the trap_frame_t struct exactly (in reverse order, because
     push es         ; that's how x86 stacks work)
@@ -89,6 +91,17 @@ isr_common_entry:
 
     cmp byte [sched_pending], 0
     je .no_switch
+
+    ; Only switch on scheduler-driving interrupts.
+    ; 0x20 = PIT tick IRQ (time-slice / wakeups)
+    ; 0x81 = explicit cooperative yield interrupt
+    mov eax, [esp + 52]       ; trap_frame_t.vector
+    cmp eax, 0x20
+    je .do_switch
+    cmp eax, 0x81
+    jne .no_switch
+
+.do_switch:
     push esp                  ; old_esp (points at edi slot)
     call sched_do_switch      ; eax = new task saved_esp
     add esp, 4

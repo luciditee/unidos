@@ -132,17 +132,17 @@ Goal: move from flat physical assumptions to managed virtual memory.
 ### 5.3 Post-bootstrap paging/runtime gates
 Note: 5.3 and 5.4 items may be implemented in parallel with milestone 6. They are not required to declare Milestone 5.2 complete, but are required for stable kernel/user bringup in Milestone 6.
 
-- [~] `#PF` handler prints [X] CR2, [X] raw error code, [X] P/W/U, and [ ] EIP/CS.
+- [X] `#PF` handler prints [X] CR2, [X] raw error code, [X] P/W/U, and [X] EIP/CS.
 - [X] Paging API exists and works: `map`, `unmap`, `query`. Workable early TLB flush policy implemented.
-- [ ] Controlled user-mode entry path exists (`iret` into ring3 works)
-- [ ] Fault policy split exists:
-    - [ ] Kernel fault => panic
-	- [ ] User fault => kill offending process
+- [X] Controlled user-mode entry path exists (`iret` into ring3 works)
+- [X] Fault policy split exists:
+    - [X] Kernel fault => panic
+	- [X] User fault => kill offending task
 
 ### 5.4 Higher-Half Refactor
 - [X] Linker script updated to reflect kernel image copy to high memory
 - [X] .bss section explicitly zeroed in kernel init assembly
-- [X] PMM frames and VMM pages reserved for kernel code and kernel stack, with [ ] guard page at end of stack (with value definable as N pages, default 4 e.g. 16KiB of stack space, likely more in practical use)
+- [X] PMM frames and VMM pages reserved for kernel code and kernel stack, with [X] guard page at end of stack (with value definable as N pages, default 4 e.g. 16KiB of stack space, likely more in practical use)
 - [X] Kernel remapped to new region and far jump handled accordingly
 
 Exit criteria:
@@ -155,11 +155,11 @@ Exit criteria:
 
 Goal: support ring 3 processes safely.
 
-- [ ] Define trap/interrupt gate policy (`DPL=3` only where intended).
-- [ ] Implement syscall entry path (software interrupt or fast trap strategy).
-- [ ] Wire `TSS.ESP0`-based privilege stack switch.
-- [ ] Implement safe user-memory copy helpers (`copyin/copyout`) with fault handling.
-- [ ] Add minimal syscall set (recommended first pass):
+- [X] Define trap/interrupt gate policy (`DPL=3` only where intended).
+- [X] Implement syscall entry path (software interrupt or fast trap strategy).
+- [X] Wire `TSS.ESP0`-based privilege stack switch.
+- [X] Implement safe user-memory copy helpers (`copyin/copyout`) with fault handling.
+- [X] Add minimal syscall set (recommended first pass):
 	- `write` (console)
 	- `exit`
 	- `yield` or `nanosleep` equivalent stub
@@ -173,6 +173,7 @@ System calls are activated via `int 0x80` (the `sysenter` and `syscall` instruct
 
 - On any system interrupt, the standard trap frame `trap_frame_t` passes the interrupt vector, which is parsed by the ISR. If the vector in the trap frame is `0x80`, the syscall handler is invoked.
 - From there, the contents of `eax` are read to decode which system call is being emitted (`0`/`read`, `1`/`write`, `2`/`open`, etc.) and the syscall table is used to decode exact values and the C function pointers they map to.
+- Syscall numeric IDs (to be passed in `eax`) should generally use Linux's standard. If not available, 4.4BSD's standard to be used as a fallback as I implement.
 - Callers are also expected to populate GP registers `ebx`, `ecx`, `edx`, `esi`, `edi`, `ebp` with parameters for the C function that ultimately runs (in that order).
 - Return values from the functions are placed back into `eax` when control returns from the C function to the `int 0x80` ISR stub, and `iret` returns control to the userspace program which initiated the system call.
 
