@@ -21,8 +21,8 @@ void exception_gpf(trap_frame_t* tf) {
     kdbg_dump_current();
 
     if (GET_USERMODE(tf->cs)) {
-        kdbg_puts("Killing offending task...\r\n", 0x0C);
-        task_kill_current("General Protection Fault", tf->error);
+        kdbg_puts("Killing offending thread...\r\n", 0x0C);
+        thread_kill_current("General Protection Fault", tf->error);
     } else {
         panic("General Protection Fault in kernel mode", tf);
         HALT_FOREVER;
@@ -61,8 +61,8 @@ void exception_pf(trap_frame_t* tf) {
         kdbg_puts("\r\n\r\n", 0x0C);
 
         // TODO: actual SIGKILL semantics in the future
-        kdbg_puts("Killing offending task...\r\n", 0x0C);
-        task_kill_current("Page fault", err);
+        kdbg_puts("Killing offending thread...\r\n", 0x0C);
+        thread_kill_current("Page fault", err);
     } else {
         PRINT_PF;
         panic("Page fault in kernel mode", tf);
@@ -76,8 +76,8 @@ void exception_ud(trap_frame_t* tf) {
     kdbg_dump_current();
 
     if (GET_USERMODE(tf->cs)) {
-        kdbg_puts("Killing offending task...\r\n", 0x0C);
-        task_kill_current("Invalid Opcode", tf->error);
+        kdbg_puts("Killing offending thread...\r\n", 0x0C);
+        thread_kill_current("Invalid Opcode", tf->error);
     } else {
         panic("Invalid Opcode in kernel mode", tf);
         HALT_FOREVER;
@@ -90,7 +90,7 @@ void exception_ss(trap_frame_t* tf) {
 
     if (GET_USERMODE(tf->cs)) {
         kdbg_puts("Killing offending task...\r\n", 0x0C);
-        task_kill_current("Stack Segment Fault", tf->error);
+        thread_kill_current("Stack Segment Fault", tf->error);
     } else {
         panic("Stack Segment Fault in kernel mode", tf);
         HALT_FOREVER;
@@ -102,8 +102,8 @@ void exception_np(trap_frame_t* tf) {
     kdbg_dump_current();
 
     if (GET_USERMODE(tf->cs)) {
-        kdbg_puts("Killing offending task...\r\n", 0x0C);
-        task_kill_current("Segment Not Present", tf->error);
+        kdbg_puts("Killing offending thread...\r\n", 0x0C);
+        thread_kill_current("Segment Not Present", tf->error);
     } else {
         panic("Segment Not Present in kernel mode", tf);
         HALT_FOREVER;

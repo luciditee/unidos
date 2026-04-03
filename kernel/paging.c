@@ -35,7 +35,7 @@ extern paging_status_t pmm_reserve_pageframe(uint32_t* out_phys_addr, bool clear
 // Returns the physical address of the page directory on success, 0 on failure.
 // If failure, and if out_status is not null, out_status will contain status code
 // indicating nature of failure.
-uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status) {
+uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* out_status) {
     if (identity_bytes % 4096 != 0) {
         if (out_status) 
             *out_status = PAGING_ERR_ALIGN;
@@ -69,8 +69,7 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
     // PHYS_WINDOW_BASE, where N matches the number of identity PTs.
     uint32_t physwin_pts = needed_pts;
     uint32_t needed_frames_total = needed_frames + 1 + physwin_pts;
-
-    // needed_frames_total includes one frame for PD + identity PTs + 1 high PT
+    
     if (needed_frames_total > (PT_MAX + 1)) {
         if (out_status)
             *out_status = PAGING_ERR_EXCESS_PAGES_REQUESTED;
@@ -135,7 +134,7 @@ uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* o
     uint32_t kernel_bytes = kernel_phys_end - kernel_phys_start;
     uint32_t kernel_pages = kernel_bytes >> 12;
 
-    if (kernel_pages > 1024) {
+    if (kernel_pages > 1024) {       
         if (out_status) *out_status = PAGING_ERR_EXCESS_PAGES_REQUESTED;
         return 0;
     }
@@ -494,7 +493,7 @@ paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags) {
 
     volatile uint32_t* pd = pd_ptr();
     if ((pd[pdi] & PG_PRESENT) == 0)
-        return PAGING_ERR_NOT_MAPPED; // not present in PD
+        return PAGING_ERR_NOT_MAPPED; // table not present in PD
 
     if (flags & PG_USER) {
         if ((pd[pdi] & PG_USER) == 0)

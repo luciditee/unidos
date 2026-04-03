@@ -4,11 +4,19 @@
 #include <stddef.h>
 #include "paging.h"
 #include "kmain.h"
+#include "panic.h"
 
 #define MEM_REGIONS_MAX 256
 #define KERNEL_VIRTUAL_BASE 0xC0000000
 #define STACK_VIRTUAL_BASE 0xF7000000
 #define PHYS_WINDOW_BASE 0xD0000000
+#define PHYS_WINDOW_SIZE 0x10000000 // 256MiB window for direct physical memory access, used for PMM staging and other misc tasks that require direct phys access
+
+#define REGION_KERNEL_STACK "unistack"
+#define REGION_PHYSWIN "physwin"
+#define REGION_THREADPOOL "threadpool"
+#define REGION_PROCESSPOOL "processpool"
+#define REGION_KSTACK "kstacks"
 
 _Static_assert((STACK_VIRTUAL_BASE & 0x003FFFFFu) == 0,
     "STACK_VIRTUAL_BASE must be 4MiB PDE-aligned");
@@ -18,10 +26,14 @@ _Static_assert((STACK_VIRTUAL_BASE & 0x003FFFFFu) == 0,
 #endif
 
 static inline uintptr_t phys_to_virt(uint32_t phys_addr) {
+    if (phys_addr + PHYS_WINDOW_BASE < phys_addr)
+        panic("Virtual address overflow at physwin translation", NULL);
     return (uintptr_t)(PHYS_WINDOW_BASE + phys_addr);
 }
 
 static inline uintptr_t virt_to_phys(uint32_t virt_addr) {
+    if ((virt_addr - PHYS_WINDOW_BASE) > PHYS_WINDOW_BASE)
+        panic("Virtual address underflow at physwin translation", NULL);
     return (uintptr_t)(virt_addr - PHYS_WINDOW_BASE);
 }
 
@@ -81,12 +93,19 @@ typedef struct {
     mem_type_t type;
 } mem_region_t;
 
+// Initialize all memory subsystems
 void mem_init(void);
+
+// PMM FUNCTIONS
 void pmm_switch_to_phys_window_alias(void);
 uint32_t pmm_get_next_available_block(pmm_alloc_result_t* out_status);
 pmm_alloc_result_t pmm_alloc_specific_block(uint32_t page_aligned_phys_addr);
 pmm_alloc_result_t pmm_dealloc_specific_block(uint32_t page_aligned_phys_addr);
 bool pmm_query_bitmap(uint32_t address);
+
+// KERNEL VIRTUAL ADDRESS MANAGER FUNCTIONS
+void kva_register_region(const char* name, uint32_t size, uint32_t* out_base);
+bool kva_map_region(const char* name);
 
 
 _Static_assert(MEM_REGIONS_MAX >= 16, "MEM_REGIONS_MAX too small");

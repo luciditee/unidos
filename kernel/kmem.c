@@ -58,7 +58,7 @@ static inline void bm_clear(uint32_t f) { pagebitmap[f >> 3] &= ~(1u << (f & 7))
 // Forward declaration for paging function defined in paging.c. We just want kmain to call
 // mem_init to perform all-up memory management init, but we don't expose paging_init_identity_window
 // in headers because it needs to be called exactly once.
-extern uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status);
+extern uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* out_status);
 
 // Forward declaration for pmm functions defined in this file
 // Initializes the physical memory manager, given a set of memory regions to track

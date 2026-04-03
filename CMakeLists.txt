@@ -61,6 +61,9 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/sys/exit.c
   ${CMAKE_SOURCE_DIR}/kernel/sys/write.c
   ${CMAKE_SOURCE_DIR}/kernel/sys/yield.c
+  ${CMAKE_SOURCE_DIR}/kernel/sys/wait.c
+  ${CMAKE_SOURCE_DIR}/kernel/pool.c
+  ${CMAKE_SOURCE_DIR}/kernel/kva.c
 )
 
 set(KERNEL_INCLUDE_DIRS
@@ -305,13 +308,13 @@ add_custom_target(image ALL
 
 if(QEMU_I386_EXECUTABLE)
   add_custom_target(run-qemu
-    COMMAND ${QEMU_I386_EXECUTABLE} -fda ${FLOPPY_IMG} -boot a -m 16M -serial stdio -monitor none -no-reboot -no-shutdown
+    COMMAND ${QEMU_I386_EXECUTABLE} -fda ${FLOPPY_IMG} -boot a -m 32M -serial stdio -monitor none -no-reboot -no-shutdown
     COMMENT "Run floppy image in QEMU"
     VERBATIM
   )
 
   add_custom_target(debug-qemu
-    COMMAND ${QEMU_I386_EXECUTABLE} -fda ${FLOPPY_IMG} -boot a -m 16M -serial stdio -monitor none -S -s
+    COMMAND ${QEMU_I386_EXECUTABLE} -fda ${FLOPPY_IMG} -boot a -m 32M -serial stdio -monitor none -S -s
     COMMENT "Run QEMU with GDB stub (:1234)"
     VERBATIM
   )

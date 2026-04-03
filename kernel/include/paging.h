@@ -83,11 +83,12 @@ static inline uint32_t read_cr2(void) {
 }
 
 // Creates PD/PTs, identity maps, loads CR3, sets CR0.PG
-uint32_t paging_init_identity_window(uint32_t identity_bytes, paging_status_t* out_status);
+uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* out_status);
 
 bool is_paging_ready();
 paging_status_t paging_map_page(uint32_t virt_addr, uint32_t phys_addr, uint32_t flags, uint32_t* out_addr);
 paging_status_t paging_unmap_page(uint32_t virt_addr, uint32_t* out_phys_addr);
 paging_status_t paging_unmap_and_free_page(uint32_t virt_addr);
 paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out_result);
+paging_status_t paging_set_flags(uint32_t virt_addr, uint32_t flags);
 

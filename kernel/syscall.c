@@ -23,6 +23,7 @@ static syscall syscall_table[SYSCALL_MAX] = {0};
 extern ssize_t _write(trap_frame_t* tf);
 extern ssize_t _exit(trap_frame_t* tf);
 extern ssize_t _yield(trap_frame_t* tf);
+extern ssize_t _waitpid(trap_frame_t* tf);
 
 void syscall_handler(trap_frame_t* tf) {
     uint32_t nr = tf->eax;
@@ -53,6 +54,7 @@ void syscall_init() {
     // tree location for syscall_table.S can be found at (linux)/arch/i386/kernel/sys_call_table.S
     syscall_table[1] = _exit;       // noreturn
     syscall_table[4] = _write;
+    syscall_table[7] = _waitpid;
     syscall_table[158] = _yield;
 }
 

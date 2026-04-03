@@ -2,7 +2,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <sys/types.h>  // TODO: define one of our own
 #include "kmem.h"
 #include "isr.h"
 #include "kmain.h"
@@ -10,6 +9,7 @@
 #include "../include/unistd.h"
 #include "../include/uaccess.h"
 #include "../include/syscall.h"
+#include "../include/sys/types.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define COPYIN_BUF_SIZE 128
