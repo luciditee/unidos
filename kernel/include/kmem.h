@@ -48,13 +48,6 @@ static inline bool is_kernel_vaddr(uint32_t virt_addr) {
     return virt_addr >= KERNEL_VIRTUAL_BASE;
 }
 
-typedef enum cpl : uint16_t {
-    CPL_KERNEL = 0,
-    CPL_UNUSED1 = 1,
-    CPL_UNUSED2 = 2,
-    CPL_USER = 3
-} cpl_t;
-
 static inline cpl_t get_current_cpl() {
     uint16_t cpl;
     __asm__ __volatile__ ("mov %%cs, %0" : "=r" (cpl));
@@ -107,5 +100,7 @@ bool pmm_query_bitmap(uint32_t address);
 void kva_register_region(const char* name, uint32_t size, uint32_t* out_base);
 bool kva_map_region(const char* name);
 
+// Returns the estimated number of available frames
+uint64_t get_estimated_available_frames(void);
 
 _Static_assert(MEM_REGIONS_MAX >= 16, "MEM_REGIONS_MAX too small");

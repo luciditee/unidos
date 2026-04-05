@@ -190,10 +190,11 @@ void kmain() {
     kb_init();
     sched_init();
     syscall_init();
-    start_waitpid_selftest();
+    //start_waitpid_selftest();
     __asm__ __volatile__ ("sti");
 
-    //sched_add_thread(syscall_test);
+    process_t* p = proc_alloc(NULL, CTX_KERNEL, "testproc"); 
+    sched_add_thread(syscall_test, p);
 
     //trigger_intentional_page_fault();
 

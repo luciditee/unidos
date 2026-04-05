@@ -22,6 +22,13 @@ typedef struct trap_tail {
                 eflags; // return EFLAGS
 } __attribute__((packed)) trap_tail_t;
 
+typedef enum cpl : uint16_t {
+    CPL_KERNEL = 0,
+    CPL_UNUSED1 = 1,
+    CPL_UNUSED2 = 2,
+    CPL_USER = 3
+} cpl_t;
+
 static inline void kmemcpy(void* dest, const void* src, size_t n) {
     uint8_t* d = (uint8_t*)dest;
     const uint8_t* s = (const uint8_t*)src;

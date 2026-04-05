@@ -23,6 +23,9 @@ static uint32_t frame_count = 0;
 // Current frame allocation hint, used to optimize search time for free frames
 static uint32_t frame_hint = 0;
 
+// Number of page frames available (intended to be read outside this file, but not written)
+static uint64_t available_frames = 0;
+
 // Flip-flop for whether we are using physical memory window alias
 // (used partly for page manager staging; especially before high-half remap)
 static bool use_phys_window_alias = false;
@@ -43,10 +46,18 @@ volatile size_t mem_region_count = 0;
 
 // BITMAP MANIPULATION HELPERS
 // Sets a bit in the bitmap to indicate a frame is allocated.
-static inline void bm_set(uint32_t f)   { pagebitmap[f >> 3] |=  (1u << (f & 7)); }
+static inline void bm_set(uint32_t f)   { 
+    uint8_t val = pagebitmap[f >> 3];
+    pagebitmap[f >> 3] |=  (1u << (f & 7));
+    if (val != pagebitmap[f >> 3]) available_frames--; // decrement available frames count
+}
 
 // Clears a bit in the bitmap to indicate a frame is free.
-static inline void bm_clear(uint32_t f) { pagebitmap[f >> 3] &= ~(1u << (f & 7)); }
+static inline void bm_clear(uint32_t f) {
+    uint8_t val = pagebitmap[f >> 3];
+    pagebitmap[f >> 3] &= ~(1u << (f & 7));
+    if (val != pagebitmap[f >> 3]) available_frames++; // only increment if we actually freed a frame
+}
 
 // STAGE2 BOOT CONSTANTS
 #ifndef STAGE2_RESERVED_SECTORS
@@ -227,6 +238,7 @@ void pmm_init(mem_region_t* regions, size_t region_count) {
     if (top_bytes64 > 0x100000000ULL) top_bytes64 = 0x100000000ULL;
     frame_count = (uint32_t)(top_bytes64 >> 12);
     pagebitmap_size_bytes = (frame_count + 7u) >> 3;
+    available_frames = 0;
 
     // Bitmap goes immediately after the kernel image
     uint64_t loc = (uint64_t)((uint32_t)(&__kernel_end));
@@ -703,4 +715,8 @@ uint32_t pmm_get_next_available_block(pmm_alloc_result_t* out_status) {
     // No available block found,
     if (out_status) *out_status = PMM_ALLOC_OOM;
     return 0;
+}
+
+uint64_t get_estimated_available_frames(void) {
+    return available_frames;
 }

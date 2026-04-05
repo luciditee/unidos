@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include "kmain.h"
 
 typedef struct trap_frame {
@@ -29,6 +31,23 @@ typedef struct trap_frame {
 } __attribute__((packed)) trap_frame_t;
 
 typedef void (*isr_handler_t)(trap_frame_t* tf);
+
+static inline bool tf_has_user_tail(const trap_frame_t* tf) {
+    // if CS has usermode RPL, then trap frame originates from a usermode entry
+    return (tf->cs & 0x3) == CPL_USER;
+}
+
+static inline uint32_t* tf_user_esp_slot(trap_frame_t* tf) {
+    // only valid if tf_has_user_tail(tf) is true; otherwise, no user ESP was saved
+    uintptr_t base = (uintptr_t)tf;
+    uintptr_t off = offsetof(trap_frame_t, eflags) + sizeof(uint32_t);
+    return (uint32_t*)(base + off); // [eflags][user_esp][user_ss]
+}
+
+static inline uint32_t* tf_user_ss_slot(trap_frame_t* tf) {
+    // only valid if tf_has_user_tail(tf) is true; otherwise, no user SS was saved
+    return tf_user_esp_slot(tf) + 1;
+}
 
 void isr_register(uint8_t vector, isr_handler_t fn);
 void isr_dispatch(trap_frame_t* tf);

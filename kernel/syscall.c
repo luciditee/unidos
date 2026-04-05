@@ -24,10 +24,14 @@ extern ssize_t _write(trap_frame_t* tf);
 extern ssize_t _exit(trap_frame_t* tf);
 extern ssize_t _yield(trap_frame_t* tf);
 extern ssize_t _waitpid(trap_frame_t* tf);
+extern ssize_t _fork(trap_frame_t* tf);
+extern ssize_t _execve(trap_frame_t* tf);
+
+static uint32_t callcounter = 0;
 
 void syscall_handler(trap_frame_t* tf) {
     uint32_t nr = tf->eax;
-
+    
     /*kdbg_hex32(nr, 0x0E);
     kdbg_puts("\r\n", 0x0E);*/
 
@@ -53,15 +57,17 @@ void syscall_init() {
     // Not the same as x86-64 syscalls! If the above link dies, the Linux i386 source
     // tree location for syscall_table.S can be found at (linux)/arch/i386/kernel/sys_call_table.S
     syscall_table[1] = _exit;       // noreturn
+    syscall_table[2] = _fork;
     syscall_table[4] = _write;
     syscall_table[7] = _waitpid;
+    syscall_table[11] = _execve;
     syscall_table[158] = _yield;
 }
 
 extern uint8_t userprog_test[];
 extern uint8_t userprog_end[];
 
-void syscall_test(void) {    
+void syscall_test(void) { 
     size_t syscall_size = userprog_end - userprog_test;
     
     const uint32_t loadAddr = 0x40000000; // user-space test VA (clean PDE)
@@ -103,4 +109,5 @@ void syscall_test(void) {
 
     kdbg_puts("User program loaded. Jumping to it...\r\n", 0x0A);
     enter_usermode(loadAddr, stackAddr + 0x1000 - 16, GDT_SEL_UCODE | 3, GDT_SEL_UDATA | 3);
+    
 }

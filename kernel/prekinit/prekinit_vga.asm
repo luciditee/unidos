@@ -65,15 +65,15 @@ vgatext:
     jz ._putsn_done              ; if ESI is NULL, do nothing and return
     cld                         ; ensure string operations use forward direction
 ._putsn_next:
-    lodsb                       ; load byte at ESI into AL, increment ESI
-    test al, al                 ; test if done (null terminator)
-    jz ._putsn_done              ; jump to done if so
     test ecx, ecx               ; test if we've printed requested length
+    jz ._putsn_done
+    lodsb                       ; load byte at ESI into AL, increment ESI
+    test al, al                 ; stop at null terminator
     jz ._putsn_done
     mov ah, dl                  ; move attribute byte into AH for putch consumption
     call .putch                 ; print character AL=char AH=attr
     dec ecx                     ; decrement remaining length
-    loop ._putsn_next           ; loop to print next character
+    jmp ._putsn_next            ; continue until len exhausted or NUL reached
 ._putsn_done:                    
     pop ecx                     ; restore registers and return
     pop eax

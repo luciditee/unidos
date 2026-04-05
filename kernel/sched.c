@@ -278,6 +278,39 @@ thread_t* sched_add_thread(void (*entry)(void), process_t* proc) {
     return t;
 }
 
+bool sched_clone_fork(process_t* parent, process_t* child, trap_frame_t* parent_tf) {
+    uint32_t flags = irq_save_disable();
+    
+    if (parent == NULL || thread_current == NULL || 
+        child == NULL || parent_tf == NULL)
+    {
+        irq_restore(flags);
+        return false;
+    }
+    
+    // Initialize new thread to run the same code as parent, but with cloned trap frame
+    thread_t* child_thread = sched_add_thread(thread_current->entry, child);
+    if (child_thread == NULL) {
+        irq_restore(flags);
+        return false;
+    }
+    
+    // copy parent's trap frame to child_thread's saved_esp frame area
+    *((trap_frame_t*)child_thread->saved_esp) = *parent_tf;
+
+    // alternate approach: bytewise copy (commented out for now)
+    /*uint32_t* child_tf_sp = (uint32_t*)(child_thread->saved_esp);
+    uint32_t* parent_tf_sp = (uint32_t*)parent_tf;
+    for (size_t i = 0; i < sizeof(trap_frame_t) / sizeof(uint32_t); i++)
+        child_tf_sp[i] = parent_tf_sp[i];*/
+
+    ((trap_frame_t*)child_thread->saved_esp)->eax = 0; // fork returns 0 in child
+    parent_tf->eax = child->pid; // fork returns child's pid in parent
+    
+    irq_restore(flags);
+    return true;
+}
+
 uint32_t sched_do_switch(uint32_t old_esp) {
     sched_pending = 0;
 
@@ -308,10 +341,8 @@ uint32_t sched_do_switch(uint32_t old_esp) {
     return thread_current ? thread_current->saved_esp : old_esp;
 }
 
-void sched_block_current(wait_kind_t wait_kind, pid_t wait_target_pid) {
+void sched_block_current_locked(wait_kind_t wait_kind, pid_t wait_target_pid) {
     if (!thread_current) return; // should not happen
-
-    uint32_t flags = irq_save_disable();
 
     thread_current->state = THREAD_BLOCKED;
     thread_current->wait_kind = wait_kind;
@@ -320,6 +351,14 @@ void sched_block_current(wait_kind_t wait_kind, pid_t wait_target_pid) {
 
     thread_current->wait_next = thread_current->proc->waiters;
     thread_current->proc->waiters = thread_current;
+}
+
+void sched_block_current(wait_kind_t wait_kind, pid_t wait_target_pid) {
+    if (!thread_current) return; // should not happen
+
+    uint32_t flags = irq_save_disable();
+
+    sched_block_current_locked(wait_kind, wait_target_pid);
 
     irq_restore(flags);
 
@@ -751,17 +790,18 @@ void proc_reap_child(process_t* parent, process_t* child, reap_result_t* out_res
     *out_result = REAP_SUCCESS;
 }
 
-int32_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status) {
+ssize_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status) {
     if (!parent)
         return -ESRCH;
+    
+    pid_t match_pid = (pid_filter == -1) ? (pid_t)-1 : (pid_t)pid_filter;
 
     if (pid_filter < -1)
         return -EINVAL;
 
-    pid_t match_pid = (pid_filter == -1) ? (pid_t)-1 : (pid_t)pid_filter;
-
+    uint32_t flags;
     for (;;) {
-        uint32_t flags = irq_save_disable();
+        flags = irq_save_disable();
         bool have_matching_child = false;
 
         if (match_pid == (pid_t)-1) {
@@ -794,9 +834,11 @@ int32_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status) {
             irq_restore(flags);
             return -ECHILD;
         }
-        // Keep IRQs disabled across check->block transition to avoid a
-        // lost-wakeup window where child exits before we enqueue as waiter.
-        sched_block_current((pid_filter == -1) ? WAIT_ANY : WAIT_CHILD, match_pid);
+    
+
+        sched_block_current_locked((match_pid == (pid_t)-1) ? WAIT_ANY : WAIT_CHILD, match_pid);
+        irq_restore(flags);
+        sched_thread_yield();
     }
 }
 

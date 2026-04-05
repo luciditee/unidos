@@ -5,7 +5,7 @@
 #include "../include/syscall.h"
 #include "../include/uaccess.h"
 
-// waitpid(2): minimal path for Milestone 7
+// placeholder waitpid(2) to support only basic waiting functionality
 // Supported now:
 //  - waitpid(-1, &status, 0)
 //  - waitpid(child_pid, &status, 0)

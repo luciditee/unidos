@@ -185,14 +185,31 @@ Note: On return, only `eax` is guaranteed to contain a useful value -- other GP 
 
 Goal: run and manage multiple independent processes.
 
-- [ ] Define process/thread structures (`pid`, state, kernel stack, address space, file table refs).
-- [ ] Implement scheduler states: runnable, running, blocked, zombie.
-- [ ] Implement `fork` baseline (or `spawn` shortcut first, then `fork`).
-- [ ] Implement `exec` to replace address space with loaded image.
-- [ ] Implement `wait`/reap semantics for parent/child lifecycle.
+- [~] Define process/thread structures ([X] `pid`, [X] state, [X] kernel stack, [~]address space, [ ] file table refs).
+- [X] Implement scheduler states: runnable, running, blocked, zombie.
+- [X] Implement `fork` baseline (or `spawn` shortcut first, then `fork`).
+- [X] Implement `exec` to replace address space with loaded image.
+- [X] Implement `wait`/reap semantics for parent/child lifecycle.
 
 Exit criteria:
 - Parent can create child, child exits, parent reaps deterministically.
+
+## 7.5) Process model stabilization
+
+Some of this is covered by milestone 8.3, but as I progress it has become increasingly clear that some of these make more sense to do before the rest of milestone 8.
+
+- [ ] Define per-process CR3 (on context switch, load process CR3 when thread_current->proc->addr_space changes). Switch/flush behavior *must* be deterministic
+- [ ] Eager fork-copy of process code/data, not just trap frame (will do copy-on-write later)
+- [ ] `exec(2)` should replace process images + stack in new `mm_t` instance (create new `mm_t`, map code and stack there, copy it, swap current->proc->addr_space to new one, switch cr3, then do what I already do and set tf->eip and user-tail ESP/SS). Old image should stay intact on failure to avoid half-baked `mm_t` swaps.
+- [ ] `mm_destroy` on last process-thread exit/reap, honoring refcount
+- [~] `fork(2)` should fully tear down any PMM or paging manager allocations done in the event of a failure-to-fork
+
+Deferring copy-on-write, actual ELF binary loader, definable argv/envp, and proper `brk`/`mmap` syscalls until later.
+
+Exit criteria:
+- Successful parent/child process memory isolation test (child should be able to update value in its own address space without affecting parent)
+- `waitpid` should return expected child + status
+- One-shot `execve` success path and one error path
 
 ---
 
@@ -265,11 +282,4 @@ Goal: postpone until kernel fundamentals are stable.
 - [ ] Treat every fault as diagnosable: never reboot without a visible reason in debug builds.
 - [ ] Make on-disk and in-memory structure endianness/packing explicit.
 
----
-
-## Suggested immediate next 2-week target
-
-1. Complete Milestones 1-3 fully.
-2. Deliver Milestone 4 demo (`1/2/K`) as proof of preemption + IRQ correctness.
-3. Begin Milestone 5 with allocator scaffolding and a functional `#PF` path.
 

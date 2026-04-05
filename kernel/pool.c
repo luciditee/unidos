@@ -44,17 +44,17 @@ void pool_get_kstack(size_t slot, uint32_t* bottom, uint32_t* top) {
 }
 
 void pool_init(uint32_t* thread_base, size_t* thread_count, uint32_t* proc_base, size_t* proc_count) {
-    // we scale these regions by powers of two above 8 (2^3), up to 128 (2^7)
+    // we scale these regions by powers of two above 8 (2^3), up to 2^N
     // (this range can be expanded in the future, but at the moment the kernel simply
     // does not work with >= 1GiB of memory)
-    
+
     // This gives us a reasonable number of threads and processes to work with
     // The smallest power of two which fits our memory size becomes a multiplier
     // for how many page we ultimately allocate, bounded by 8MiB (no scalar) 
-    // and 128MiB (max scalar)
+    // and 2^N (max scalar)
     uint32_t memory_mb = g_avail_memory_kib / 1024;
     uint32_t scalar = 1;
-    static const int maxScalar = 7;
+    static const int maxScalar = 4;
     while (memory_mb >> 1 != 0 && memory_mb > 16 && scalar < maxScalar) {
         memory_mb = memory_mb >> 1;
         scalar++;
@@ -129,6 +129,11 @@ void pool_init(uint32_t* thread_base, size_t* thread_count, uint32_t* proc_base,
     kdbg_puts(" process, 0x", 0x0F);
     kdbg_hex32(g_kstack_pool_slot_count, 0x0F);
     kdbg_puts(" kstacks available\r\n", 0x0F);
+
+    uint32_t frames = (uint32_t)get_estimated_available_frames();
+    kdbg_puts("available memory according to bitmap: ", 0x0F);
+    kdbg_hex32(((frames * 4096)) / 1024 / 1024, 0x0F);
+    kdbg_puts(" MiB\r\n", 0x0F);
 
     return;
 }

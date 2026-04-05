@@ -124,4 +124,5 @@ process_t* proc_find_zombie_child(process_t* parent, pid_t child_pid);
 bool proc_has_children(process_t* parent);
 void thread_reap(thread_t* t);
 void proc_reap_child(process_t* parent, process_t* child, reap_result_t* out_result);
-int32_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status);
+ssize_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status);
+bool sched_clone_fork(process_t* parent, process_t* child, trap_frame_t* parent_tf);
