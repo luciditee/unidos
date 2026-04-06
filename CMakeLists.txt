@@ -66,6 +66,7 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/sys/exec.c
   ${CMAKE_SOURCE_DIR}/kernel/pool.c
   ${CMAKE_SOURCE_DIR}/kernel/kva.c
+  ${CMAKE_SOURCE_DIR}/kernel/mm.c
 )
 
 set(KERNEL_INCLUDE_DIRS

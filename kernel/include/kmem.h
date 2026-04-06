@@ -9,6 +9,7 @@
 #define MEM_REGIONS_MAX 256
 #define KERNEL_VIRTUAL_BASE 0xC0000000
 #define STACK_VIRTUAL_BASE 0xF7000000
+#define MMS_VIRTUAL_BASE 0xF0000000
 #define PHYS_WINDOW_BASE 0xD0000000
 #define PHYS_WINDOW_SIZE 0x10000000 // 256MiB window for direct physical memory access, used for PMM staging and other misc tasks that require direct phys access
 

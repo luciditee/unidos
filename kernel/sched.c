@@ -6,6 +6,7 @@
 #include "include/pool.h"
 #include "include/errno.h"
 #include "include/panic.h"
+#include "include/mm.h"
 #include "io.h"
 
 #define RR_SCHEDULER_CADENCE 10 // every N ticks
@@ -329,6 +330,9 @@ uint32_t sched_do_switch(uint32_t old_esp) {
         if (thread_current) {
             thread_current->state = THREAD_RUNNING;
             sched_set_tss_esp0(thread_current);
+
+            if (thread_current->proc->addr_space)
+                mm_switch(thread_current->proc->addr_space);
         }
         return thread_current ? thread_current->saved_esp : old_esp;
     }
@@ -337,6 +341,8 @@ uint32_t sched_do_switch(uint32_t old_esp) {
     if (thread_current) {
         thread_current->state = THREAD_RUNNING;
         sched_set_tss_esp0(thread_current);
+        if (thread_current->proc->addr_space)
+            mm_switch(thread_current->proc->addr_space);
     }
     return thread_current ? thread_current->saved_esp : old_esp;
 }
@@ -608,7 +614,11 @@ process_t* proc_alloc(process_t* parent, process_context_t context, const char* 
     p->main_thread = NULL;
     p->thread_list = NULL;
     p->waiters = NULL;
-    p->addr_space = NULL; // to be set up later
+
+    if (p->context != CTX_KERNEL)
+        p->addr_space = parent != NULL ? mm_clone_user_eager(parent->addr_space) : mm_create();
+    else
+        p->addr_space = NULL;
 
     if (parent) {
         // add to parent's child list
@@ -641,7 +651,10 @@ void proc_free(process_t* p) {
         }
     }
 
-    // free threads, address space, etc. as needed (not implemented here)
+    if (p->addr_space) {
+        mm_destroy(p->addr_space);
+        p->addr_space = NULL;
+    }
 
     // mark process slot as free
     p->slot_inuse = false;

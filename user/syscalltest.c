@@ -13,7 +13,7 @@ void _start(void) {
         : "memory", "cc"
     );
 
-    for(volatile int i = 0; i < 1000000; i++); // burn cycles temporarily
+    //for(volatile int i = 0; i < 1000000; i++); // burn cycles temporarily
 
     /* execve("/not/a/real/path", NULL, NULL) */
     // confirmed that this returns ENOENT

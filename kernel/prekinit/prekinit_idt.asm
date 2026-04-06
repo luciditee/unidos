@@ -103,7 +103,9 @@ isr_common_entry:
 
 .do_switch:
     push esp                  ; old_esp (points at edi slot)
+    ; cli                     ; redundant, forgot that 80386 clears IF on interrupt gates
     call sched_do_switch      ; eax = new task saved_esp
+    ; sti
     add esp, 4
     mov esp, eax              ; commit context switch
 .no_switch:

@@ -209,6 +209,11 @@ volatile uint32_t* pd_ptr() {
     return (volatile uint32_t*)PHYS_TO_VIRT(page_directory_loc_phys);
 }
 
+// Helper to return the physical address of our kernel-mode PD
+uint32_t paging_get_kernel_pd_phys(void) {
+    return page_directory_loc_phys;
+}
+
 // Helper which obtains a pointer to the PD for a given PD index, to be
 // used after higher-half remap. Returns null if PDE is not present or 
 // index is out-of-bounds.

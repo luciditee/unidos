@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "isr.h"
+#include "mm.h"
 #include "./sys/types.h"
 
 #define MAX_PROCESSES 65535
@@ -48,14 +49,6 @@ typedef enum reap_result {
     REAP_INVALID_PID = 2,
     REAP_UNLINKED_CHILD = 3
 } reap_result_t;
-
-typedef struct mm {
-    uintptr_t cr3_phys; // physical address of page directory
-    uint32_t refcount;
-    uintptr_t user_base; // base of user-space mapping (for sanity checks, not necessarily used for anything else)
-    uintptr_t user_limit; // top of user-space mapping (must be < KERNEL_VIRTUAL_BASE)
-    uint32_t page_count; 
-} mm_t;
 
 typedef struct process {
     bool slot_inuse;
