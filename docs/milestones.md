@@ -15,12 +15,12 @@ Goal: ensure bootloader->kernel handoff remains stable while kernel complexity g
 
 - [X] Keep `docs/boot-protocol.md` authoritative for stage2->kernel state.
 - [X] Verify handoff register contract uses **ECX** for kparams length (`xor ecx, ecx`, `mov word cx, [length]`).
-- [~] Add a small "protocol assertions" section in kernel entry comments (expected `CS/DS/SS`, `DL`, `ESI`, `ECX`, `IF`, `DF`).
-- [~] Add an early panic path that prints a clear fatal code and halts.
+- [X] Add a small "protocol assertions" section in kernel entry comments (expected `CS/DS/SS`, `DL`, `ESI`, `ECX`, `IF`, `DF`).
+- [X] Add an early panic path that prints a clear fatal code and halts.
 
 Exit criteria:
 -[X] A boot with no kparams and a boot with kparams both reach the same kernel entry path.
-- [~] Mismatch/fatal paths are visible on screen and deterministic.
+- [X] Mismatch/fatal paths are visible on screen and deterministic.
 
 ---
 
@@ -198,11 +198,11 @@ Exit criteria:
 
 Some of this is covered by milestone 8.3, but as I progress it has become increasingly clear that some of these make more sense to do before the rest of milestone 8.
 
-- [ ] Define per-process CR3 (on context switch, load process CR3 when thread_current->proc->addr_space changes). Switch/flush behavior *must* be deterministic
-- [ ] Eager fork-copy of process code/data, not just trap frame (will do copy-on-write later)
-- [ ] `exec(2)` should replace process images + stack in new `mm_t` instance (create new `mm_t`, map code and stack there, copy it, swap current->proc->addr_space to new one, switch cr3, then do what I already do and set tf->eip and user-tail ESP/SS). Old image should stay intact on failure to avoid half-baked `mm_t` swaps.
-- [ ] `mm_destroy` on last process-thread exit/reap, honoring refcount
-- [~] `fork(2)` should fully tear down any PMM or paging manager allocations done in the event of a failure-to-fork
+- [X] Define per-process CR3 (on context switch, load process CR3 when thread_current->proc->addr_space changes). Switch/flush behavior *must* be deterministic
+- [X] Eager fork-copy of process code/data, not just trap frame (will do copy-on-write later)
+- [X] `exec(2)` should replace process images + stack in new `mm_t` instance (create new `mm_t`, map code and stack there, copy it, swap current->proc->addr_space to new one, switch cr3, then do what I already do and set tf->eip and user-tail ESP/SS). Old image should stay intact on failure to avoid half-baked `mm_t` swaps.
+- [X] `mm_destroy` on last process-thread exit/reap, honoring refcount
+- [X] `fork(2)` should fully tear down any PMM or paging manager allocations done in the event of a failure-to-fork
 
 Deferring copy-on-write, actual ELF binary loader, definable argv/envp, and proper `brk`/`mmap` syscalls until later.
 
@@ -217,21 +217,75 @@ Exit criteria:
 
 Goal: load arbitrary user programs from disk.
 
-### 8.1 Disk/block layer
-- [ ] Introduce block device abstraction (even if floppy-only at first).
-- [ ] Implement buffered block reads with retry/error surfaces.
+### 8.0 Object model + FD groundwork (do first)
+- [ ] Introduce kernel object model with refcount + type tags (`file`, `vnode`, `blockdev`).
+- [ ] Add per-process file descriptor table + system-wide open file table.
+- [ ] Preserve current console-only behavior while plumbing generic `read`/`write`/`close` file ops.
+- [ ] Reserve a straightforward path for exposing block devices as file descriptors later.
 
-### 8.2 Filesystem MVP
-- [ ] Implement read-only FAT12 mount + path traversal sufficient for `/bin/*`.
-- [ ] Add directory iteration + file read API.
+### 8.1 Device discovery + generic block layer
+- [ ] Define `block_device` + `block_ops` API (`read_blocks`, `write_blocks`, `flush`, `get_info`).
+- [ ] Use LBA + block-count API for all higher layers (no filesystem assumptions at block layer).
+- [ ] Add driver probe registry (ordered list of probe functions) at init time.
+- [ ] Enumerate supported devices and register canonical handles (`fd0`, later `hd0`, etc.).
+- [ ] Add retry + surfaced error reporting at block layer boundaries.
 
-### 8.3 Program format + crt0
-- [ ] Choose executable format (ELF strongly recommended; flat binary only as temporary).
-- [ ] Implement userspace image loader and initial user stack setup (`argc/argv/envp` plan).
-- [ ] Provide crt0 that calls `main` then `exit`.
+### 8.2 Partition shim (MBR only for now)
+- [ ] Add thin MBR parser for partition-capable block devices.
+- [ ] Expose each partition as a child block device (`<dev>p1..p4`) with LBA offset/length.
+- [ ] Keep partition handling transparent to filesystem code (filesystem sees a normal block handle).
+- [ ] Defer extended/logical partitions initially, but document this explicitly.
+
+### 8.3 Buffer cache
+- [ ] Add shared block cache keyed by (`device`, `lba`) for metadata + data reads.
+- [ ] Track at least `valid/dirty/busy` states and enforce basic concurrency discipline.
+- [ ] Start with sync/write-through policy; leave delayed writeback as future optimization.
+
+### 8.4 VFS scaffold + mount framework
+- [ ] Introduce VFS objects (`superblock`, `vnode`, `dentry`/name cache, `file`).
+- [ ] Define minimal FS operation table common to all filesystems.
+	- [ ] mount/unmount
+	- [ ] lookup
+	- [ ] open/close
+	- [ ] read
+	- [ ] readdir
+	- [ ] stat (or minimal equivalent)
+- [ ] Add mount options parser scaffold (store `key[=value]` options even if not all are used yet).
+- [ ] Define root mount policy (which boot device/partition becomes `/`).
+
+### 8.5 FAT family driver (single core for FAT12/16/32)
+- [ ] Implement one FAT driver with runtime FAT-type detection from BPB + cluster count.
+- [ ] Keep FAT-type differences opaque above the filesystem layer.
+- [ ] Implement read-only FAT12 first, then generalize code paths to FAT16/32.
+- [ ] Implement path traversal + directory iteration + regular file read.
+
+### 8.6 FAT permission sidecar (`UNIDOS.PRM`)
+- [ ] Implement optional per-directory sidecar parser for `UNIDOS.PRM` metadata.
+- [ ] Map entries to minimal permission byte (and reserve bits for future symlink/file-type hints).
+- [ ] Define deterministic fallback when sidecar file/entry is missing.
+- [ ] Gate behavior behind mount options scaffold so policy can later be toggled.
+
+### 8.7 Executable loading bridge
+- [ ] Refactor `execve` path to resolve executable via VFS path lookup.
+- [ ] Introduce binary format dispatch (`flat` now, ELF later) behind a common loader interface.
+- [ ] Keep current staging-`mm_t` commit semantics (old image unchanged on load failure).
+- [ ] Load flat binaries with current shared code/data-page policy as temporary implementation.
+
+### 8.8 Syscall bridge for shell-era userspace
+- [ ] Add `open`, `close`, `read`, `lseek`, and minimal directory enumeration syscall surface.
+- [ ] Keep `write` integrated with FD layer (stdout/stderr still map to console initially).
+- [ ] Add minimal userspace test programs for path lookup, file read, and exec-by-path.
+
+### 8.9 Hardening to prevent churn in Milestone 9 onward
+- [ ] Ensure no sleeping/blocking in hard IRQ context across block + FS paths.
+- [ ] Normalize internal error mapping to stable `-errno` returns.
+- [ ] Add path normalization policy (`.`, `..`, duplicate `/`, max path length).
+- [ ] Add failure-unwind tests for partial map/load/open paths.
 
 Exit criteria:
-- Kernel loads and runs a user program from disk by pathname.
+- [ ] Kernel loads and runs a user program from disk by pathname.
+- [ ] Same loader path works with at least one non-hardcoded pathname.
+- [ ] VFS + block interfaces support adding a second filesystem without API breakage.
 
 ---
 
@@ -281,5 +335,9 @@ Goal: postpone until kernel fundamentals are stable.
 - [ ] Avoid hidden dependence on emulator quirks (validate in both QEMU and PCem).
 - [ ] Treat every fault as diagnosable: never reboot without a visible reason in debug builds.
 - [ ] Make on-disk and in-memory structure endianness/packing explicit.
+
+## Tech debt to resolve
+- [ ] Deprecate physical window at 0xD0000000 - Reliance on this substantially limits the amount of addressable memory the kernel may boot with. A physical window for mappings below 1MB is acceptable
+- [ ] Proxy PD mapping at a fixed location in kernel address space - Ensure kernel-mode PD exists at a predictable place by keeping a guaranteed address range to walk the PD/PTs without having to have kernel CR3 active
 
 

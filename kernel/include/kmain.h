@@ -10,8 +10,6 @@
 #define GDT_SEL_UDATA 0x20
 #define GDT_SEL_TSS   0x28
 
-#define STACK_PAGE_SIZE 16
-
 #define HALT_FOREVER for (;;) __asm__ __volatile__("hlt")
 
 typedef struct trap_tail {

@@ -178,6 +178,13 @@ void kernel_highhalf_remap() {
     // before we drop low aliases
     pmm_switch_to_phys_window_alias();
 
+    // VGA text output code uses a runtime base address variable (vga_base).
+    // Switch it from the low identity-mapped 0xB8000 to the physical window
+    // alias so VGA access works from per-process address spaces that lack
+    // the low identity map in PDE 0.
+    extern void vgatext_switch_to_physwin(uint32_t phys_window_base);
+    vgatext_switch_to_physwin(PHYS_WINDOW_BASE);
+
     // Tear down low identity aliases from 1MiB and above.
     // This enforces ABI cleanliness for future user-space layouts and removes
     // all low-VA kernel aliases.

@@ -4,6 +4,7 @@
 #include "paging.h"
 #include "kmain.h"
 #include "panic.h"
+#include "dpage.h"
 
 // All pages whose starts reside at 0xFFFF8000..0xFFFFF000 are reserved
 // for copying mm_t structs to reduce dependency on physical/IDmapped 
@@ -25,22 +26,15 @@
 // externs unsuitable for exposure in headers, but needed for mm
 extern uint32_t paging_get_kernel_pd_phys(void);
 
-// Bitmap which tracks virtual addresses available to use for mm allocation
-static uint8_t* mm_vaddr_bitmap = (uint8_t*)MMS_VIRTUAL_BASE;// placeholder, will be initialized properly in mm_init
+// Bitmap which tracks virtual addresses available to use for mm allocation.
+// The bitmap lives at MMS_BITMAP_BASE (immediately below the pool) so it
+// never overlaps with the mm_t structs that start at MMS_VIRTUAL_BASE.
+static uint8_t* mm_vaddr_bitmap = (uint8_t*)MMS_BITMAP_BASE;
 static uint32_t mm_vaddr_size_bytes = (STACK_VIRTUAL_BASE - MMS_VIRTUAL_BASE) & ~0xFFFu;
 
-// Sets a bit in the bitmap to indicate a slot is taken.
-static inline void bm_set(uint32_t f)   { 
-    mm_vaddr_bitmap[f >> 3] |=  (1u << (f & 7));
-}
-
-// Clears a bit in the bitmap to indicate a slot is free.
-static inline void bm_clear(uint32_t f) {
-    mm_vaddr_bitmap[f >> 3] &= ~(1u << (f & 7));
-}
-
-static inline uint32_t bm_slot_to_vaddr(uint32_t slot) {
-    return MMS_VIRTUAL_BASE + (slot * sizeof(mm_t));
+void mm_init(void) {
+    if (!dpage_init(MMS_BITMAP_BASE, MMS_VIRTUAL_BASE, mm_vaddr_bitmap))
+        panic("failed to initialize mm demand-paged pool", NULL);
 }
 
 // Assumes the current PD is the kernel PD. Returns the physical address
@@ -98,94 +92,11 @@ uint32_t _mm_alloc_pd(mm_status_t* out_status) {
 }
 
 mm_t* _mm_alloc_mm(mm_status_t* out_status) {
-    for (uint32_t slot = 0; slot < (mm_vaddr_size_bytes / sizeof(mm_t)); slot++) {
-        if ((mm_vaddr_bitmap[slot >> 3] & (1u << (slot & 7))) == 0) {
-            // Found a free slot, mark it as taken and return the corresponding vaddr
-            bm_set(slot);
-            if (out_status) *out_status = MM_SUCCESS;
-            
-            // Lazy mapping: This vaddr might not yet be mapped. Get the page
-            // this vaddr would be on, and if it's not mapped, map it.
-            uint32_t vaddr = bm_slot_to_vaddr(slot);
-
-            // It's possible that the mm_t struct spans two pages, so we need to
-            // check both the page of the starting address and the page of the ending address.
-            uint32_t pages_to_check[2];
-            uint32_t num_pages = 1;
-            pages_to_check[0] = vaddr & ~0xFFFu;
-            pages_to_check[1] = (vaddr + sizeof(mm_t) - 1) & ~0xFFFu;
-            if (pages_to_check[1] != pages_to_check[0]) {
-                num_pages = 2;
-            }
-
-            for (uint32_t p = 0; p < num_pages; p++) {
-                uint32_t page_start = pages_to_check[p];
-                volatile uint32_t* kpd = (uint32_t*)PHYS_TO_VIRT(paging_get_kernel_pd_phys());
-                uint32_t pdi = page_start >> 22;
-                uint32_t pti = (page_start >> 12) & 0x3FFu;
-                
-                // Find if it's present in the kernel PD, and use this to determine
-                // whether we've already mapped this before
-                bool need_map = false;
-                if ((kpd[pdi] & PG_PRESENT) == 0) {
-                    need_map = true;
-                } else {
-                    uint32_t* pt = (uint32_t*)PHYS_TO_VIRT(kpd[pdi] & ~0xFFFu);
-                    if ((pt[pti] & PG_PRESENT) == 0) {
-                        need_map = true;
-                    }
-                }
-                
-                // We found a need to map this page, so we should demand-map it in the kernel PD
-                if (need_map) {
-                    pmm_alloc_result_t res;
-                    uint32_t phys = pmm_get_next_available_block(&res);
-                    if (res != PMM_ALLOC_SUCCESS) {
-
-                        if (p > 0) {
-                            // If we already mapped the first page but failed on the second, we should unmap the first page and free its frame before returning
-                            uint32_t unmap_phys;
-                            paging_unmap_page(pages_to_check[0], &unmap_phys);
-                            pmm_dealloc_specific_block(unmap_phys);
-                        }
-
-                        bm_clear(slot);
-
-                        if (out_status) *out_status = MM_MM_PMM_INIT_FAILED;
-                        return NULL;
-                    }
-                    
-                    paging_status_t map_res = paging_map_page(page_start, phys, PG_PRESENT | PG_RW, NULL);
-                    if (map_res != PAGING_OK) {
-                        
-                        pmm_dealloc_specific_block(phys);
-
-                        if (p > 0) {
-                            // If we already mapped the first page but failed on the second, we should unmap the first page and free its frame before returning
-                            uint32_t unmap_phys;
-                            paging_unmap_page(pages_to_check[0], &unmap_phys);
-                            pmm_dealloc_specific_block(unmap_phys);
-                        }
-
-                        bm_clear(slot);
-                        if (out_status) *out_status = MM_MM_PG_INIT_FAILED;
-                        return NULL;
-                    }
-                }
-            }
-
-            // If here, the page(s) are mapped, so we can zero out the specific region
-            // we care about
-            uint32_t* ptr = (uint32_t*)vaddr;
-            for (uint32_t i = 0; i < (sizeof(mm_t) / 4); i++) ptr[i] = 0;
-
-            return (mm_t*)vaddr;
-        }
-    }
-
-    // This should never happen because we track availability with mm_bitmap_slots_avail, but just in case:
-    if (out_status) *out_status = MM_NO_MORE_REGION_SLOTS;
-    return NULL;
+    return (mm_t*)dpage_alloc(mm_vaddr_bitmap, 
+        MMS_VIRTUAL_BASE, 
+        mm_vaddr_size_bytes, 
+        sizeof(mm_t), mm_vaddr_size_bytes / 8,
+        (dpage_alloc_status_t*)out_status);
 }
 
 mm_t* mm_create(void) {
@@ -220,6 +131,7 @@ mm_t* mm_clone_user_eager(mm_t* parent) {
     volatile uint32_t* parent_pd = (uint32_t*)PHYS_TO_VIRT(parent->cr3_phys);
     volatile uint32_t* child_pd  = (uint32_t*)PHYS_TO_VIRT(child->cr3_phys);
 
+    // Clone page directory, tables, mapped pages, and physical frames
     static const size_t max_pde = (KERNEL_VIRTUAL_BASE >> 22);
     for (size_t i = 0; i < max_pde; i++) {
         if ((parent_pd[i] & PG_PRESENT) == 0) continue;
@@ -269,6 +181,23 @@ mm_t* mm_clone_user_eager(mm_t* parent) {
         }
     }
 
+    // Clone VMAs, if present
+    vma_t* pvma = parent->vma_head;
+    while (pvma != NULL) {
+        vma_t* cvma = vma_alloc();
+        if (cvma == NULL) {
+            // Failed to allocate a VMA (probably OOM or bitmap exhaustion)
+            mm_destroy(child);
+            return NULL;
+        }
+        cvma->start = pvma->start;
+        cvma->end   = pvma->end;
+        cvma->type  = pvma->type;
+        cvma->prot  = pvma->prot;
+        vma_insert(child, cvma);
+        pvma = pvma->next;
+    }
+
     return child;
 }
 
@@ -282,6 +211,8 @@ void mm_destroy(mm_t* mm) {
     if ((current_cr3 & ~0xFFFu) == mm->cr3_phys) {
         panic("mm_destroy: attempted to destroy the active address space", NULL);
     }
+
+    vma_destroy_all(mm);
 
     // Get reference to the PD of the mm we're destroying
     volatile uint32_t* pd = (uint32_t*)PHYS_TO_VIRT(mm->cr3_phys);
@@ -306,7 +237,7 @@ void mm_destroy(mm_t* mm) {
     pmm_dealloc_specific_block(mm->cr3_phys);
     
     // Mark the location for this mm struct as free in the bitmap
-    bm_clear(mm->slot_id);
+    dpage_bm_clear(mm->slot_id, mm_vaddr_bitmap, mm_vaddr_size_bytes / 8);
 }
 
 // Switches current active page directory to the one specified in the

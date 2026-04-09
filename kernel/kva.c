@@ -8,7 +8,6 @@
 
 #define KVA_REGION_MAX 16
 #define KVA_NAME_MAX 16
-#define KVA_REGION_BASE KERNEL_VIRTUAL_BASE + 0x01000000
 
 typedef struct kva_region {
     char name[KVA_NAME_MAX];

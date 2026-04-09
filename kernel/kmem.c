@@ -4,6 +4,8 @@
 #include "paging.h"
 #include "bootinfo.h"
 
+#define MEM_REGIONS_MAX     256
+
 // Helper macros since we have no cstdlib to work with here
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
@@ -720,3 +722,5 @@ uint32_t pmm_get_next_available_block(pmm_alloc_result_t* out_status) {
 uint64_t get_estimated_available_frames(void) {
     return available_frames;
 }
+
+_Static_assert(MEM_REGIONS_MAX >= 16, "MEM_REGIONS_MAX too small");

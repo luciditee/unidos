@@ -67,47 +67,37 @@ void syscall_init() {
 extern uint8_t userprog_test[];
 extern uint8_t userprog_end[];
 
-void syscall_test(void) { 
-    size_t syscall_size = userprog_end - userprog_test;
-    
-    const uint32_t loadAddr = 0x40000000; // user-space test VA (clean PDE)
-    const uint32_t stackAddr = 0x40001000; // user-space test stack VA (next page after code)
-    uint32_t user_phys = 0;
-    uint32_t stack_phys = 0;
-    pmm_alloc_result_t ares1, ares2;
-    user_phys = pmm_get_next_available_block(&ares1);
-    stack_phys = pmm_get_next_available_block(&ares2);
-    if (ares1 != PMM_ALLOC_SUCCESS || ares2 != PMM_ALLOC_SUCCESS) { 
-        kdbg_puts("Failed to phys alloc page frame for testing syscall\r\n", 0x0C);
+void syscall_test(void) {
+    process_t* proc = sched_current_process();
+    if (!proc || !proc->addr_space) {
+        kdbg_puts("syscall_test: no process or address space\r\n", 0x0C);
         return;
     }
 
-    paging_status_t status = paging_map_page(
-    loadAddr, user_phys, PG_PRESENT | PG_RW | PG_USER, NULL);
-    if (status != PAGING_OK) {
-        if (!(status == PAGING_ERR_ALREADY_MAPPED && user_phys != loadAddr)) {
-            kdbg_puts("Failed to map test page for testing syscall (code ", 0x0C);
-            kdbg_hex32(status, 0x0C);
-            kdbg_puts(")\r\n", 0x0C);
-            return;
-        }
+    mm_t* mm = proc->addr_space;
+    size_t code_size = userprog_end - userprog_test;
+
+    const uint32_t code_va  = 0x40000000;
+    const uint32_t stack_va = 0x40001000;
+
+    int res = mm_map_region(mm, code_va, 0x1000,
+                            VMA_TEXT, VMA_PROT_READ | VMA_PROT_WRITE | VMA_PROT_EXEC,
+                            userprog_test, code_size);
+    if (res != 0) {
+        kdbg_puts("syscall_test: failed to map code\r\n", 0x0C);
+        return;
     }
 
-    paging_status_t stack_status = paging_map_page(
-        stackAddr, stack_phys, PG_PRESENT | PG_RW | PG_USER, NULL);
-    if (stack_status != PAGING_OK) {
-        if (!(stack_status == PAGING_ERR_ALREADY_MAPPED && stack_phys != stackAddr)) {
-            kdbg_puts("Failed to map test stack page for testing syscall (code ", 0x0C);
-            kdbg_hex32(stack_status, 0x0C);
-            kdbg_puts(")\r\n", 0x0C);
-            return;
-        }
+    res = mm_map_region(mm, stack_va, 0x1000,
+                        VMA_STACK, VMA_PROT_READ | VMA_PROT_WRITE,
+                        NULL, 0);
+    if (res != 0) {
+        kdbg_puts("syscall_test: failed to map stack\r\n", 0x0C);
+        return;
     }
 
-    kdbg_puts("Copying test program\r\n", 0x0A);
-    kmemcpy((void*)loadAddr, userprog_test, syscall_size);
-
-    kdbg_puts("User program loaded. Jumping to it...\r\n", 0x0A);
-    enter_usermode(loadAddr, stackAddr + 0x1000 - 16, GDT_SEL_UCODE | 3, GDT_SEL_UDATA | 3);
-    
+    kdbg_puts("User program loaded via mm_map_region. Jumping to it...\r\n", 0x0A);
+    mm_switch(mm);
+    enter_usermode(code_va, stack_va + 0x1000 - 16,
+                   GDT_SEL_UCODE | 3, GDT_SEL_UDATA | 3);
 }

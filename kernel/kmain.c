@@ -193,7 +193,7 @@ void kmain() {
     //start_waitpid_selftest();
     __asm__ __volatile__ ("sti");
 
-    process_t* p = proc_alloc(NULL, CTX_KERNEL, "testproc"); 
+    process_t* p = proc_alloc(NULL, CTX_USER, "testproc"); 
     sched_add_thread(syscall_test, p);
 
     //trigger_intentional_page_fault();

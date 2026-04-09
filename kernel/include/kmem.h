@@ -6,12 +6,55 @@
 #include "kmain.h"
 #include "panic.h"
 
-#define MEM_REGIONS_MAX 256
+//// KERNEL MEMORY MAP LAYOUT ////
+// Virtual address space mimics Linux's higher-half schema on i386:
+// 0x00000000 - 0xBFFFFFFF: user-space (3GB)
+// 0xC0000000 - 0xFFFFFFFF: kernel-space (1GB)
+// Within kernel-space, the following layout:
+// Base address of the kernel image once remapped to higher-half
 #define KERNEL_VIRTUAL_BASE 0xC0000000
-#define STACK_VIRTUAL_BASE 0xF7000000
-#define MMS_VIRTUAL_BASE 0xF0000000
-#define PHYS_WINDOW_BASE 0xD0000000
-#define PHYS_WINDOW_SIZE 0x10000000 // 256MiB window for direct physical memory access, used for PMM staging and other misc tasks that require direct phys access
+
+// Base address of KVA, which holds various dynamically allocated
+// pools of structures related to process/thread/stack management
+#define KVA_REGION_BASE (KERNEL_VIRTUAL_BASE + 0x01000000)
+
+// Base address of the physical memory window (to be deprecated)
+#define PHYS_WINDOW_BASE    0xD0000000
+
+// ── Demand-paged pools for mm_t and vma_t ─────────────────────────────
+//
+// Each pool has a bitmap that tracks which slots are allocated.  The
+// bitmap is stored in its own pages *immediately below* the pool's
+// virtual base so the two regions never overlap.  The number of bitmap
+// pages is configurable per pool -- 1 page (4 KiB = 32 768 bits) is
+// enough for ~32 k slots of the larger struct and ~130 k of the smaller.
+//
+// To increase bitmap capacity later, raise the _BITMAP_PAGES constant
+// for the relevant pool.  The bitmap base will automatically shift
+// downward to accommodate the extra pages.
+
+// How many pages to devote to each pool's allocation bitmap.
+#define VMA_BITMAP_PAGES    1
+#define MMS_BITMAP_PAGES    1
+
+// Base address for process VMAs (demand-paged pool)
+#define VMA_VIRTUAL_BASE    0xF0000000
+#define VMA_BITMAP_BASE     (VMA_VIRTUAL_BASE - (VMA_BITMAP_PAGES * 0x1000))
+
+// Base address for process memory maps (demand-paged pool)
+#define MMS_VIRTUAL_BASE    0xF4000000
+#define MMS_BITMAP_BASE     (MMS_VIRTUAL_BASE - (MMS_BITMAP_PAGES * 0x1000))
+
+// The lowest possible address on the kernel stack
+// Ranges from STACK_VIRTUAL_BASE to STACK_TOP, growing downward
+// from STACK_TOP
+#define STACK_VIRTUAL_BASE  0xF7000000
+
+// The size of the kernel stack.
+#define STACK_TOP (STACK_VIRTUAL_BASE + (STACK_PAGE_SIZE << 12))
+
+//// MEMORY MAP HELPERS ////
+#define STACK_PAGE_SIZE     16
 
 #define REGION_KERNEL_STACK "unistack"
 #define REGION_PHYSWIN "physwin"
@@ -103,5 +146,3 @@ bool kva_map_region(const char* name);
 
 // Returns the estimated number of available frames
 uint64_t get_estimated_available_frames(void);
-
-_Static_assert(MEM_REGIONS_MAX >= 16, "MEM_REGIONS_MAX too small");

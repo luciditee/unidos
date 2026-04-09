@@ -33,6 +33,8 @@ static void sched_idle(void);
 static void wake_parent_waiter(process_t* child);
 
 extern uint8_t tss32;
+extern void mm_init(void);
+extern void vma_init(void);
 
 static void _sched_strncpy(char* dest, const char* src, size_t n) {
     size_t lim = MIN(n, MAXCOMLEN);
@@ -85,6 +87,19 @@ static void build_initial_frame(thread_t* t, void (*start_eip)(void)) {
 
     // Note: These must match the exact order of pushes in isr_common_entry,
     // and consequently, the exact layout of trap_frame_t.
+    //
+    // User tail (SS3 / ESP3) -- always reserved, even for kernel threads.
+    //
+    // When iret sees a ring-0 CS it ignores these two dwords and pops only
+    // EIP/CS/EFLAGS, so they are harmless for kernel threads.  But for
+    // user-mode threads (e.g. a fork'd child), the CPU *does* pop them to
+    // restore user SS:ESP.  sched_clone_fork copies the parent's user tail
+    // into these slots; if we didn't reserve the space here, that copy
+    // would write past the end of the trap frame and corrupt the stack,
+    // leading to a #GP on the child's first iret.
+    PUSH(0);                     // user SS  (placeholder)
+    PUSH(0);                     // user ESP (placeholder)
+
     PUSH(0x00000202u);           // EFLAGS (IF=1)
     PUSH(GDT_SEL_KCODE);         // CS
     PUSH((uint32_t)start_eip);   // EIP
@@ -117,11 +132,15 @@ void sched_init(void) {
     uint32_t thread_pool_base, process_pool_base;
     pool_init(&thread_pool_base, &thread_pool_count, 
         &process_pool_base, &process_pool_count);
+    
+    // init pools for mm and vma
+    mm_init();
+    vma_init();
 
     // set up pointers for indexing
     thread_pool = (thread_t*)thread_pool_base;
     process_pool = (process_t*)process_pool_base;
-
+    
     thread_current = NULL;
     thread_head = NULL;
     thread_sleep_head = NULL;
@@ -299,13 +318,16 @@ bool sched_clone_fork(process_t* parent, process_t* child, trap_frame_t* parent_
     // copy parent's trap frame to child_thread's saved_esp frame area
     *((trap_frame_t*)child_thread->saved_esp) = *parent_tf;
 
-    // alternate approach: bytewise copy (commented out for now)
-    /*uint32_t* child_tf_sp = (uint32_t*)(child_thread->saved_esp);
-    uint32_t* parent_tf_sp = (uint32_t*)parent_tf;
-    for (size_t i = 0; i < sizeof(trap_frame_t) / sizeof(uint32_t); i++)
-        child_tf_sp[i] = parent_tf_sp[i];*/
+    // Copy the user tail (ESP3 / SS3) that lives just beyond trap_frame_t.
+    // build_initial_frame reserved space for these two dwords.  The parent's
+    // trap frame was pushed by a ring-3 int $0x80, so the CPU saved the
+    // caller's SS:ESP right after EFLAGS.  We must propagate them to the
+    // child so its iret restores a valid user stack.
+    trap_frame_t* child_tf = (trap_frame_t*)child_thread->saved_esp;
+    *tf_user_esp_slot(child_tf) = *tf_user_esp_slot(parent_tf);
+    *tf_user_ss_slot(child_tf)  = *tf_user_ss_slot(parent_tf);
 
-    ((trap_frame_t*)child_thread->saved_esp)->eax = 0; // fork returns 0 in child
+    child_tf->eax = 0; // fork returns 0 in child
     parent_tf->eax = child->pid; // fork returns child's pid in parent
     
     irq_restore(flags);
@@ -615,9 +637,15 @@ process_t* proc_alloc(process_t* parent, process_context_t context, const char* 
     p->thread_list = NULL;
     p->waiters = NULL;
 
-    if (p->context != CTX_KERNEL)
+    if (p->context != CTX_KERNEL) {
         p->addr_space = parent != NULL ? mm_clone_user_eager(parent->addr_space) : mm_create();
-    else
+        if (!p->addr_space) {
+            // Fail soft, return null because we were unable to create mm address space
+            p->slot_inuse = false;
+            irq_restore(flags);
+            return NULL;
+        }
+    } else
         p->addr_space = NULL;
 
     if (parent) {

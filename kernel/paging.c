@@ -276,6 +276,18 @@ bool is_paging_ready() {
 // Returns a status code indicating whether or not the given virtual address
 // could successfully be queried. If so, out_result (if present) is populated
 // with details of the mapping. If not, out_result is zeroed out.
+//
+// Implementation note (Milestone 7.5):
+//   This function walks the *live* page directory loaded in CR3 rather than
+//   the static page_tables_loc_phys[] array.  The old approach only knew
+//   about the kernel master PD's page tables and returned NOT_MAPPED for
+//   any user page installed by mm_map_region() into a per-process PD.
+//   That broke copyout → paging_query_page → EFAULT on every waitpid().
+//
+//   The fix reads CR3, converts the PD physical address through the
+//   permanent physical window (PHYS_TO_VIRT), extracts the PT physical
+//   address directly from the PDE (pd[pdi] & 0xFFFFF000), and accesses
+//   the PT the same way.  No dependency on page_tables_loc_phys[].
 paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out_result) {
     if (page_directory_loc_phys == 0)
         return PAGING_ERR_NOT_INITIALIZED;
@@ -288,32 +300,35 @@ paging_status_t paging_query_page(uint32_t virt_addr, paging_query_result_t* out
 
     paging_query_result_t result = {0};
 
-    uint32_t pd_entry = pd_ptr()[pdi];
-    if ((pd_entry & PG_PRESENT) == 0) { // not present in PD
+    // Read the currently-active page directory from CR3.
+    // This reflects whichever address space the CPU is executing in
+    // (kernel master PD *or* a per-process PD after mm_switch).
+    uint32_t cr3_val;
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3_val));
+
+    volatile uint32_t* pd = (volatile uint32_t*)PHYS_TO_VIRT(cr3_val & 0xFFFFF000);
+
+    uint32_t pd_entry = pd[pdi];
+    if ((pd_entry & PG_PRESENT) == 0) {
         if (out_result) *out_result = result;
         return PAGING_ERR_NOT_MAPPED;
     }
 
-    if (page_tables_loc_phys[pdi] == 0) { // not mapped in PMM
-        if (out_result) *out_result = result;
-        return PAGING_ERR_NOT_MAPPED;
-    }
-
-    volatile uint32_t* pt = pt_ptr_from_pdi(pdi);
-    if (!pt) { // PT null pointer, either not present in PD or out of bounds
-        if (out_result) *out_result = result;
-        return PAGING_ERR_NOT_MAPPED;
-    }
+    // Extract the PT physical address directly from the PDE rather than
+    // consulting page_tables_loc_phys[].  This is the authoritative
+    // source -- the PDE *is* the hardware's record of where the PT lives.
+    uint32_t pt_phys = pd_entry & 0xFFFFF000;
+    volatile uint32_t* pt = (volatile uint32_t*)PHYS_TO_VIRT(pt_phys);
 
     uint32_t pt_entry = pt[pti];
-    if ((pt_entry & PG_PRESENT) == 0) { // not present in PT
+    if ((pt_entry & PG_PRESENT) == 0) {
         if (out_result) *out_result = result;
         return PAGING_ERR_NOT_MAPPED;
     }
 
     result.mapped = true;
-    result.phys_addr = pt_entry & 0xFFFFF000; // physical frame address
-    result.flags = pt_entry & 0xFFF; // flags from PTE
+    result.phys_addr = pt_entry & 0xFFFFF000;
+    result.flags = pt_entry & 0xFFF;
 
     if (out_result) *out_result = result;
 

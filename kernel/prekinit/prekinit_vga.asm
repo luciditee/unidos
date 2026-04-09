@@ -1,4 +1,10 @@
-%define VGA_TEXT_BUFFER 0xB8000
+; VGA text buffer base address.
+; Starts at the raw physical address (identity-mapped in bootstrap PD).
+; After ktrampoline sets up the physical window, C code calls
+; vgatext_switch_to_physwin() to redirect all VGA access through the
+; kernel-half physical window (0xD0000000+0xB8000).  This is required
+; because per-process PDs do NOT carry the low identity map (PDE 0).
+%define VGA_PHYS_ADDR 0xB8000
 %define VGA_ATTR_DEFAULT    0x0F        ; bright white on black
 %define VGA_CURSOR_PORT     0x3D4
 %define VGA_DEFAULT_COLS    80
@@ -33,6 +39,27 @@ global vgatext.putch
 global vgatext.set_cursor_linear
 global vgatext.set_cursor_enabled
 global vgatext.cls
+global vgatext_switch_to_physwin
+global vga_base
+
+section .data
+; Runtime VGA base address. Initially points to the identity-mapped
+; physical address (usable before ktrampoline).  After the physical
+; window is live, C code calls vgatext_switch_to_physwin() to redirect.
+vga_base: dd VGA_PHYS_ADDR
+
+section .text
+
+; vgatext_switch_to_physwin(uint32_t phys_window_base)
+; cdecl: new base passed on stack
+vgatext_switch_to_physwin:
+    push ebp
+    mov ebp, esp
+    mov eax, [ebp+8]            ; phys_window_base argument
+    add eax, VGA_PHYS_ADDR      ; phys_window_base + 0xB8000
+    mov [vga_base], eax
+    pop ebp
+    ret
 
 vgatext:
 .puts:      ; Input: ESI=pointer to null-terminated string, or NULL
@@ -102,7 +129,7 @@ vgatext:
 
     movzx edx, ax               ; zero-extend AX to EDX
     shl edx, 1                  ; cell index -> byte offset
-    add edx, VGA_TEXT_BUFFER    ; offset from start of VGA buffer
+    add edx, [vga_base]         ; offset from start of VGA buffer
     mov [edx], bx               ; write character/attribute word
 
     mov ax, cx                  ; restore cell index in AX
@@ -170,13 +197,15 @@ vgatext:
     cld         ; ensure forward direction for string ops
     ; Move rows 1..24 up to 0..23. Each row is VGA_DEFAULT_COLS * 2 bytes, so 160 bytes per row.
     ; We can move 4 bytes at a time with movsd, so ECX = (160/4) * 24 = 960 dwords.
-    mov esi, VGA_TEXT_BUFFER + VGA_ROW_BYTES      ; source: row 1
-    mov edi, VGA_TEXT_BUFFER                      ; dest:   row 0
+    mov esi, [vga_base]                           ; source: row 1
+    add esi, VGA_ROW_BYTES
+    mov edi, [vga_base]                           ; dest:   row 0
     mov ecx, ((VGA_DEFAULT_ROWS - 1) * VGA_ROW_BYTES) / 4 ; 3840/4 = 960 dwords
     rep movsd
 
     ; Clear last row (row 24) by writing spaces with default attribute
-    mov edi, VGA_TEXT_BUFFER + ((VGA_DEFAULT_ROWS - 1) * VGA_ROW_BYTES)
+    mov edi, [vga_base]
+    add edi, ((VGA_DEFAULT_ROWS - 1) * VGA_ROW_BYTES)
     mov ah, VGA_ATTR_DEFAULT
     mov al, ' '
     mov ecx, VGA_DEFAULT_COLS
@@ -294,7 +323,7 @@ vgatext:
     ; build a default cell value: blank space char, white on black
     mov ax, (VGA_COLOR(VGA_FG_BRIGHT | VGA_FG_GRAY, VGA_BG_BLACK) << 8) | ' '
     mov ecx, VGA_DEFAULT_CELLS  ; set how many cells we expect to iterate
-    mov edi, VGA_TEXT_BUFFER    ; point to start of VGA text buffer
+    mov edi, [vga_base]         ; point to start of VGA text buffer
 
     cld                         ; ensure forward direction for string ops
     rep stosw                   ; write default cell value held in AX into text buffer

@@ -5,7 +5,7 @@ org 0x0000
 %include "constants.inc.asm"
 
 %ifndef STAGE2_RESERVED_SECTORS
-%define STAGE2_RESERVED_SECTORS 6
+%define STAGE2_RESERVED_SECTORS 7
 %endif
 
 %define TOTAL_RESERVED_SECTORS (1 + STAGE2_RESERVED_SECTORS)
