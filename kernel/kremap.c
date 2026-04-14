@@ -32,10 +32,10 @@ extern const uint8_t isr_stub_table;
 // Helper (in lieu of normal panic()) for failures specific to kernel high-half remap,
 // which is such a critical step that failure is to be treated as unrecoverable
 static void remap_panic_status(const char* msg, uint32_t code) {
-    kdbg_puts(msg, 0x0C);
-    kdbg_puts(" (code ", 0x0C);
-    kdbg_hex32(code, 0x0C);
-    kdbg_puts(")\r\n", 0x0C);
+    //kdbg_puts(msg, 0x0C);
+    //kdbg_puts(" (code ", 0x0C);
+    //kdbg_hex32(code, 0x0C);
+    //kdbg_puts(")\r\n", 0x0C);
     HALT_FOREVER;
 }
 
@@ -43,7 +43,7 @@ static void remap_panic_status(const char* msg, uint32_t code) {
 // migrate the stack to STACK_VIRTUAL_BASE, and ultimately drop low memory aliases.
 void kernel_highhalf_remap() {
     if (!is_paging_ready()) {
-        kdbg_puts("Cannot perform kernel high-half remap: paging not ready\r\n", 0x0C);
+        //kdbg_puts("Cannot perform kernel high-half remap: paging not ready\r\n", 0x0C);
         HALT_FOREVER;
         return;
     }
@@ -60,7 +60,7 @@ void kernel_highhalf_remap() {
     uint32_t kernelPhysEnd = (((uint32_t)&__kernel_end) + 0xFFFu) & ~0xFFFu;
     uint32_t kernelPages = (kernelPhysEnd - kernelPhysStart) >> 12;
 
-    kdbg_puts("Verifying high-half kernel mapping...\r\n", 0x0A);
+    //kdbg_puts("Verifying high-half kernel mapping...\r\n", 0x0A);
     for (uint32_t i = 0; i < kernelPages; i++) {
         uint32_t virt = KERNEL_VIRTUAL_BASE + (i << 12);
         uint32_t expectedPhys = kernelPhysStart + (i << 12);
@@ -69,13 +69,13 @@ void kernel_highhalf_remap() {
         paging_status_t qres = paging_query_page(virt, &q);
         if (qres == PAGING_OK && q.mapped) {
             if (q.phys_addr != expectedPhys) {
-                kdbg_puts("Kernel mapping mismatch at virt ", 0x0C);
-                kdbg_hex32(virt, 0x0C);
-                kdbg_puts(" expected phys ", 0x0C);
-                kdbg_hex32(expectedPhys, 0x0C);
-                kdbg_puts(" got ", 0x0C);
-                kdbg_hex32(q.phys_addr, 0x0C);
-                kdbg_puts("\r\n", 0x0C);
+                //kdbg_puts("Kernel mapping mismatch at virt ", 0x0C);
+                //kdbg_hex32(virt, 0x0C);
+                //kdbg_puts(" expected phys ", 0x0C);
+                //kdbg_hex32(expectedPhys, 0x0C);
+                //kdbg_puts(" got ", 0x0C);
+                //kdbg_hex32(q.phys_addr, 0x0C);
+                //kdbg_puts("\r\n", 0x0C);
                 HALT_FOREVER;
                 return;
             }
@@ -92,7 +92,7 @@ void kernel_highhalf_remap() {
 
     // TODO: kparams remapping (not using kparams yet)
 
-    kdbg_puts("Allocating and mapping kernel stack pages...\r\n", 0x0A);
+    //kdbg_puts("Allocating and mapping kernel stack pages...\r\n", 0x0A);
 
     // Reserve/map each stack page explicitly so we never rely on arithmetic
     // against memory-top values or assumptions about contiguous availability.
@@ -156,11 +156,11 @@ void kernel_highhalf_remap() {
     uint32_t isrAddr = (uint32_t)&isr_stub_table;
 
     if (gdtAddr < KERNEL_VIRTUAL_BASE || idtAddr < KERNEL_VIRTUAL_BASE || isrAddr < KERNEL_VIRTUAL_BASE) {
-        kdbg_puts("Descriptor/ISR symbols are not in higher-half virtual space\r\n", 0x0C);
-        kdbg_puts("gdt=", 0x0C); kdbg_hex32(gdtAddr, 0x0C);
-        kdbg_puts(" idt=", 0x0C); kdbg_hex32(idtAddr, 0x0C);
-        kdbg_puts(" isr=", 0x0C); kdbg_hex32(isrAddr, 0x0C);
-        kdbg_puts("\r\n", 0x0C);
+        //kdbg_puts("Descriptor/ISR symbols are not in higher-half virtual space\r\n", 0x0C);
+        //kdbg_puts("gdt=", 0x0C); //kdbg_hex32(gdtAddr, 0x0C);
+        //kdbg_puts(" idt=", 0x0C); //kdbg_hex32(idtAddr, 0x0C);
+        //kdbg_puts(" isr=", 0x0C); //kdbg_hex32(isrAddr, 0x0C);
+        //kdbg_puts("\r\n", 0x0C);
         HALT_FOREVER;
         return;
     }
@@ -188,7 +188,7 @@ void kernel_highhalf_remap() {
     // Tear down low identity aliases from 1MiB and above.
     // This enforces ABI cleanliness for future user-space layouts and removes
     // all low-VA kernel aliases.
-    kdbg_puts("Unmapping low identity aliases from 1MiB and above...\r\n", 0x0A);
+    //kdbg_puts("Unmapping low identity aliases from 1MiB and above...\r\n", 0x0A);
     uint32_t lowUnmapStart = 0x00100000;
     uint32_t lowUnmapEnd = (((uint32_t)g_avail_memory_kib << 10) + 0xFFFu) & ~0xFFFu;
     for (uint32_t virt = lowUnmapStart; virt < lowUnmapEnd; virt += 4096) {
@@ -232,5 +232,5 @@ void kernel_highhalf_remap() {
     // have to happen such as PIC remapping and PIT initialization, which are handled
     // elsewhere.
 
-    kdbg_puts("Kernel high-half remap complete\r\n", 0x0A);
+    //kdbg_puts("Kernel high-half remap complete\r\n", 0x0A);
 }

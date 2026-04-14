@@ -2,6 +2,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "./io/fdpool.h"
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ __volatile__ ("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -65,3 +66,5 @@ void pic_mask_irq(uint8_t irq);
 void pic_unmask_irq(uint8_t irq);
 void pic_remap();
 void pic_send_eoi(uint8_t irq);
+
+void unix_io_init();

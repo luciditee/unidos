@@ -31,9 +31,10 @@ ssize_t _waitpid(trap_frame_t* tf) {
         return ret;
 
     if (user_status) {
-        errno_t err = copyout(&status, user_status, sizeof(int));
+        errno_t err = ESUCCESS;
+        copyout(&status, user_status, sizeof(int), &err);
         if (err != ESUCCESS)
-            return err;
+            return (ssize_t)(-err);
     }
 
     return (ssize_t)ret;

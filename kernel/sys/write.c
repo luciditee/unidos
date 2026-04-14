@@ -10,24 +10,44 @@
 #include "../include/uaccess.h"
 #include "../include/syscall.h"
 #include "../include/sys/types.h"
+#include "../include/sched.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define COPYIN_BUF_SIZE 128
 
-static ssize_t __write_copyin(const char* str, size_t len, errno_t* err_out) {
+static ssize_t __write_copyin(const char* str, size_t len, errno_t* err_out, open_file_t* of) {
     uint8_t copyin_buf[COPYIN_BUF_SIZE];
     size_t remaining = len, offset = 0;
     if (err_out) *err_out = ESUCCESS;
 
     while (remaining > 0) {
+        // Determine how big of a chunk to copy in, then copy it in.
         size_t chunk = MIN(remaining, COPYIN_BUF_SIZE);
-        errno_t err = copyin(str + offset, copyin_buf, chunk);
+        errno_t err = ESUCCESS;
+        copyin(str + offset, copyin_buf, chunk, &err);
         if (err != ESUCCESS) {
             if (err_out) *err_out = err;
             return (ssize_t)offset; // partial write count
         }
-        
-        kdbg_putsn((char*)copyin_buf, 0x07, chunk);
+    
+        // Write out to the active file descriptor
+        // It's possible that open_file_write may truncate the write.
+        // In the event of an error, we return the count of bytes that did get
+        // successfully written out, but also pass-by-pointer the error code
+        ssize_t write_res = open_file_write(of, copyin_buf, chunk, of->offset, NULL, &err);
+        if (err != ESUCCESS) {
+            if (err_out) *err_out = err;
+            return (ssize_t)offset + ((write_res > 0) ? write_res : 0);
+        }
+
+        if (write_res != (ssize_t)chunk) {
+            // Short write without a backend error is still a successful partial write.
+            of->offset += (write_res > 0) ? (uint32_t)write_res : 0;
+            return (ssize_t)offset + ((write_res > 0) ? write_res : 0);
+        }
+
+        // If here, we successfully wrote the chunk (or the relevant part)
+        of->offset += (uint32_t)chunk;
         offset += chunk;
         remaining -= chunk;
     }
@@ -87,23 +107,22 @@ ssize_t _write(trap_frame_t* tf) {
     // AND the entire buffer is in user space. Also check for overflow
     if (!_ptr_range_safe(str, len, tf))
         return -EFAULT;
-    
-    switch (fd) {
-        case STDIN_FILENO: 
-            return -EBADF;  // Bad file number because writing to input doesn't make sense
-        case STDOUT_FILENO: // intentional fallthrough
-        case STDERR_FILENO: { // TODO: separate handling
-            // TODO: This is temporary. A proper file descriptor system plus a
-            // tty driver has to be implemented for this to be correct, not
-            // to mention a way to handle concurrency. For now, we just throw
-            // the string to VGA
-            errno_t err = ESUCCESS;
-            ssize_t written = __write_copyin(str, len, &err);
 
-            if (written > 0) return (errno_t)written;
-            if (err != ESUCCESS) return err;
-            return 0;
-        }
-        default: return -EBADF;  // Bad file number (for now);
-    }
+    // Get the process that called into this syscall
+    process_t* proc = sched_current_process();
+    if (!proc) return -EFAULT;
+    
+    // Get the file descriptor entry for the specified local fd
+    open_file_t* out = sched_get_proc_local_fd(proc, fd);
+    if (!out) return -EBADF;
+
+    // With that FD isolated, pass it to the chunk writer in __write_copyin,
+    // then return status/length back to caller
+    errno_t err = ESUCCESS;
+    ssize_t written = __write_copyin(str, len, &err, out);
+
+    if (written > 0) return written;
+    if (err != ESUCCESS) return -err;
+
+    return 0;
 }

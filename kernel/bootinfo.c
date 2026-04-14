@@ -70,25 +70,25 @@ void bootinfo_init(void) {
     bootinfo_getkmetadata();
 
     /*kdbg_hex32(g_kernel_phys_address, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kernel_size_bytes, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kparams_phys_address, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
     kdbg_hex32(g_kparams_size_bytes, 0x0A);
-    kdbg_puts("\r\n", 0x0A);*/
+    //kdbg_puts("\r\n", 0x0A);*/
 
     g_bootinfo_validated = true;
 }
 
 void bootinfo_validate_prefix(void) {
     if (kmemcmp(bi->signature, MAGIC_4CHAR, 4) != 0) {
-        kdbg_puts("Invalid bootinfo signature\r\n", 0x0C);
+        //kdbg_puts("Invalid bootinfo signature\r\n", 0x0C);
         HALT_FOREVER;
     }
 
     if (bi->totalSize != BOOTINFO_SIZE_EXPECTED) {
-        kdbg_puts("bootinfo size mismatch\r\n", 0x0C);
+        //kdbg_puts("bootinfo size mismatch\r\n", 0x0C);
         HALT_FOREVER;
     }
 }
@@ -96,25 +96,25 @@ void bootinfo_validate_prefix(void) {
 void bootinfo_getmem(void) {
     switch (BI_EXTRACT_MEMORY_METHOD(bi->stage2Flags)) {
         case USE_CMOS:
-            kdbg_puts("Using CMOS memory map\r\n", 0x0B);
+            //kdbg_puts("Using CMOS memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->cmosMemorySize;
             g_memory_method = USE_CMOS;
             if (g_avail_memory_kib <= 0x400) {
-                kdbg_puts("CMOS reports strangely low value (got ", 0x0C);
-                kdbg_hex32(g_avail_memory_kib, 0x0C);
-                kdbg_puts(" KiB), using fallback value of ", 0x0C);
-                kdbg_hex32(SYNTHETIC_MEM_FALLBACK, 0x0C);
-                kdbg_puts(" KiB\r\n", 0x0C);
+                //kdbg_puts("CMOS reports strangely low value (got ", 0x0C);
+                //kdbg_hex32(g_avail_memory_kib, 0x0C);
+                //kdbg_puts(" KiB), using fallback value of ", 0x0C);
+                //kdbg_hex32(SYNTHETIC_MEM_FALLBACK, 0x0C);
+                //kdbg_puts(" KiB\r\n", 0x0C);
                 g_avail_memory_kib = SYNTHETIC_MEM_FALLBACK;
                 break;
             }
             break;
         case USE_E820:
-            kdbg_puts("Using E820 memory map\r\n", 0x0B);
+            //kdbg_puts("Using E820 memory map\r\n", 0x0B);
             e820_stats_t e820_stats = {0};
             uint8_t decoded_desc_count = 0;
             if (!decode_e820(&bi->e820, &e820_stats, g_e820_descs, E820_DESC_MAX, &decoded_desc_count)) {
-                kdbg_puts("Invalid E820 data\r\n", 0x0C);
+                //kdbg_puts("Invalid E820 data\r\n", 0x0C);
                 HALT_FOREVER;
             }
             g_e820_desc_count = decoded_desc_count;
@@ -122,18 +122,18 @@ void bootinfo_getmem(void) {
             g_memory_method = USE_E820;
             break;
         case USE_E801:
-            kdbg_puts("Using E801 memory map\r\n", 0x0B);
+            //kdbg_puts("Using E801 memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->e801MemorySize;
             g_memory_method = USE_E801;
             break;
         case USE_AH88:
-            kdbg_puts("Using AH88 memory map\r\n", 0x0B);
+            //kdbg_puts("Using AH88 memory map\r\n", 0x0B);
             g_avail_memory_kib = bi->ah88MemorySize;
             g_memory_method = USE_AH88;
             break;
         default:
             // Should never happen, but kept here for sanity
-            kdbg_puts("Unknown memory map method\r\n", 0x0C);
+            //kdbg_puts("Unknown memory map method\r\n", 0x0C);
             HALT_FOREVER;
     }
 }

@@ -21,7 +21,25 @@
 // Base address of the physical memory window (to be deprecated)
 #define PHYS_WINDOW_BASE    0xD0000000
 
-// ── Demand-paged pools for mm_t and vma_t ─────────────────────────────
+// Demand-paged pools for file descriptors and related structures
+// (this was added after mm_t and vma_t pools, see below comments 
+// to understand this pattern)
+#define OPENFILE_BITMAP_PAGES   1
+#define FD_BITMAP_PAGES         1
+#define FTARGET_BITMAP_PAGES     1
+
+#define OPENFILE_VIRTUAL_BASE   0xE4000000
+#define OPENFILE_BITMAP_BASE    (OPENFILE_VIRTUAL_BASE - (OPENFILE_BITMAP_PAGES * 0x1000))
+
+#define FD_VIRTUAL_BASE         0xE8000000
+#define FD_BITMAP_BASE          (FD_VIRTUAL_BASE - (FD_BITMAP_PAGES * 0x1000))
+
+#define FTARGET_VIRTUAL_BASE     0xEC000000
+#define FTARGET_BITMAP_BASE      (FTARGET_VIRTUAL_BASE - (FTARGET_BITMAP_PAGES * 0x1000))
+
+#define FTARGET_END 0xEFFFFFFF
+
+// Demand-paged pools for mm_t and vma_t
 //
 // Each pool has a bitmap that tracks which slots are allocated.  The
 // bitmap is stored in its own pages *immediately below* the pool's

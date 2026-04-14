@@ -7,7 +7,11 @@
 #include "include/errno.h"
 #include "include/panic.h"
 #include "include/mm.h"
-#include "io.h"
+#include "include/io.h"
+#include "include/io/fdpool.h"
+#include "include/io/console.h"
+#include "include/unistd.h"
+
 
 #define RR_SCHEDULER_CADENCE 10 // every N ticks
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -35,6 +39,8 @@ static void wake_parent_waiter(process_t* child);
 extern uint8_t tss32;
 extern void mm_init(void);
 extern void vma_init(void);
+
+extern fd_entry_t* fde_fork_copy(fd_entry_t* src);
 
 static void _sched_strncpy(char* dest, const char* src, size_t n) {
     size_t lim = MIN(n, MAXCOMLEN);
@@ -192,43 +198,6 @@ static void sleepq_remove(thread_t* t) {
     }
 }
 
-/*static void sweep_dead(void) {
-    if (!thread_head) return;
-
-    thread_t* tail = thread_head;
-    while (tail->rq_next != thread_head) tail = tail->rq_next;
-
-    thread_t* prev = tail;
-    thread_t* t = thread_head;
-    do {
-        thread_t* next = t->rq_next;
-
-        if (t->state == THREAD_ZOMBIE) {
-            sleepq_remove(t);   // important: dead thread might still be in sleep queue
-            prev->rq_next = next;
-
-            if (t == thread_head) {
-                thread_head = (next == t) ? NULL : next;
-            }
-            if (t == thread_current) {
-                thread_current = NULL;
-            }
-
-            t->rq_next = NULL;
-            t->sleep_next = NULL;
-            t->state = THREAD_UNUSED;
-            t->slot_inuse = false;
-
-            if (!thread_head) return;
-            t = next;
-            continue;
-        }
-
-        prev = t;
-        t = next;
-    } while (t != thread_head);
-}*/
-
 static thread_t* next_runnable(thread_t* start) {
     if (!thread_head) return NULL;
     thread_t* t = start ? start : thread_head;
@@ -315,6 +284,18 @@ bool sched_clone_fork(process_t* parent, process_t* child, trap_frame_t* parent_
         return false;
     }
     
+    // copy open file descriptors from parent to child
+    child->fd_list = fde_fork_copy(parent->fd_list); // copy file descriptor list from parent to child
+    child->fd_count = parent->fd_count; // copy fd count
+
+    if (child->fd_list == NULL && parent->fd_list != NULL) {
+        // Failed to copy file descriptors; clean up and return failure
+        thread_reap(child_thread);
+
+        irq_restore(flags);
+        return false;
+    }
+
     // copy parent's trap frame to child_thread's saved_esp frame area
     *((trap_frame_t*)child_thread->saved_esp) = *parent_tf;
 
@@ -424,6 +405,31 @@ void sched_wake_thread(thread_t* t) {
     irq_restore(flags);
 }
 
+void sched_proc_cleanup_fds(process_t* proc) {
+    if (!proc) return;
+
+    // This function is intended to be called at process exit. Each fd_entry is
+    // process-owned, and each entry may hold a reference to a shared open_file.
+    // Drop the open_file reference first, then free the process-owned fd node.
+
+    fd_entry_t* fd_it = proc->fd_list;
+    while (fd_it) {
+        // Always snapshot next first because current fd_entry is process-owned
+        // and is freed at the end of each iteration.
+        fd_entry_t* current = fd_it;
+        fd_it = fd_it->next;
+
+        open_file_put(current->of);
+
+        // FD entries themselves are process-owned and must always be freed
+        // when the process exits, regardless of shared open-file lifetime.
+        fdpool_free_fdentry(current);
+    }
+
+    proc->fd_list = NULL;
+    proc->fd_count = 0;
+}
+
 void sched_thread_exit(int code) {
     if (!thread_current) return; // should not happen
     
@@ -444,6 +450,7 @@ void sched_thread_exit(int code) {
         thread_current->proc->state = PROC_ZOMBIE;
         thread_current->proc->exit_code = code;
         wake_parent_waiter(thread_current->proc);
+        sched_proc_cleanup_fds(thread_current->proc);
     } else if (thread_current->proc->live_thread_count > 0) {
         // If there are still threads left, we need to patch the thread list to remove this one
         thread_t* it = thread_current->proc->thread_list;
@@ -625,6 +632,8 @@ process_t* proc_alloc(process_t* parent, process_context_t context, const char* 
     p->state = PROC_ALIVE;
     p->exit_code = 0;
     p->live_thread_count = 0;
+    p->fd_count = 0;
+    p->fd_list = NULL;
 
     // set parentage, context, and image name
     p->parent = parent;
@@ -659,8 +668,60 @@ process_t* proc_alloc(process_t* parent, process_context_t context, const char* 
         }
     }
 
+    // Bootstrap stdio once for root user processes. fork() children inherit
+    // descriptors from the parent and should not get a second bootstrap list
+    if (p->context != CTX_KERNEL && parent == NULL) {
+        open_file_t* stdio = console_get_stdio();
+        fd_entry_t* stdin_entry = fdpool_alloc_fdentry(stdio);
+        if (stdin_entry && stdio) open_file_get(stdio);
+
+        fd_entry_t* stdout_entry = fdpool_alloc_fdentry(stdio);
+        if (stdout_entry && stdio) open_file_get(stdio);
+
+        fd_entry_t* stderr_entry = fdpool_alloc_fdentry(stdio);
+        if (stderr_entry && stdio) open_file_get(stdio);
+
+        if (!stdin_entry || !stdout_entry || !stderr_entry) {
+            // Fail soft if we can't allocate fd entries for stdio.
+            if (stdin_entry) {
+                open_file_put(stdin_entry->of);
+                fdpool_free_fdentry(stdin_entry);
+            }
+
+            if (stdout_entry) {
+                open_file_put(stdout_entry->of);
+                fdpool_free_fdentry(stdout_entry);
+            }
+
+            if (stderr_entry) {
+                open_file_put(stderr_entry->of);
+                fdpool_free_fdentry(stderr_entry);
+            }
+        } else {
+            // Build fd linked list.
+            stdin_entry->next = stdout_entry;
+            stdout_entry->next = stderr_entry;
+            p->fd_list = stdin_entry;
+            stdin_entry->local_id = STDIN_FILENO;
+            stdout_entry->local_id = STDOUT_FILENO;
+            stderr_entry->local_id = STDERR_FILENO;
+            p->fd_count = 3;
+        }
+    }
+
     irq_restore(flags);
     return p;
+}
+
+open_file_t* sched_get_proc_local_fd(process_t* proc, int local_fd) {
+    if (!proc) return NULL;
+
+    fd_entry_t* it = proc->fd_list;
+    while (it) {
+        if (it->local_id == local_fd) return it->of;
+        it = it->next;
+    }
+    return NULL;
 }
 
 void proc_free(process_t* p) {

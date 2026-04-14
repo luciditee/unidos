@@ -6,6 +6,7 @@
 #include "isr.h"
 #include "mm.h"
 #include "./sys/types.h"
+#include "./io/fdpool.h"
 
 #define MAX_PROCESSES 65535
 #define MAX_THREADS 128
@@ -67,6 +68,8 @@ typedef struct process {
     struct thread* thread_list;
     struct thread* waiters;
     mm_t* addr_space;
+    fd_entry_t* fd_list; // linked list of open file descriptors
+    uint16_t fd_count; // number of open file descriptors
 } process_t;
 
 typedef struct thread {
@@ -119,3 +122,4 @@ void thread_reap(thread_t* t);
 void proc_reap_child(process_t* parent, process_t* child, reap_result_t* out_result);
 ssize_t proc_waitpid(process_t* parent, int32_t pid_filter, int* out_status);
 bool sched_clone_fork(process_t* parent, process_t* child, trap_frame_t* parent_tf);
+open_file_t* sched_get_proc_local_fd(process_t* proc, int local_fd);

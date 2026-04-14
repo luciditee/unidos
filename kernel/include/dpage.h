@@ -42,6 +42,12 @@ static inline void dpage_bm_clear(uint32_t i, kbitmap_t bitmap, uint32_t bitmap_
     bitmap[i >> 3] &= ~(1u << (i & 7));
 }
 
+// Checks if a single bit in a bitmap pointer is set, indicating whether the corresponding page/frame is allocated or free.
+static inline bool dpage_is_allocated(uint32_t i, kbitmap_t bitmap, uint32_t bitmap_size_bytes) {
+    if (i >= bitmap_size_bytes * 8) return false; // out of bounds, caller should ensure this doesn't happen
+    return (bitmap[i >> 3] & (1u << (i & 7))) != 0;
+}
+
 // Given a slot ID and a base address, returns virtual address corresponding to the slot.
 static inline uint32_t dpage_bm_slot_to_vaddr(uint32_t slot, uint32_t base, uint32_t size) {
     return base + (slot * size);

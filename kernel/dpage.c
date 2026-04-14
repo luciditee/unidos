@@ -40,7 +40,7 @@ bool dpage_init(uint32_t bitmap_base, uint32_t pool_base, uint8_t* bm) {
 }
 
 void* dpage_alloc(kbitmap_t vaddr_bitmap, uint32_t vaddr_base, uint32_t vaddr_size_bytes, size_t element_size, uint32_t bitmap_size_bytes, dpage_alloc_status_t* out_status) {
-    for (uint32_t slot = 0; slot < (vaddr_size_bytes / element_size); slot++) {
+    for (uint32_t slot = 0; slot < (bitmap_size_bytes * 8); slot++) {
         if ((vaddr_bitmap[slot >> 3] & (1u << (slot & 7))) == 0) {
             // Found a free slot, mark it as taken and return the corresponding vaddr
             dpage_bm_set(slot, vaddr_bitmap, bitmap_size_bytes);

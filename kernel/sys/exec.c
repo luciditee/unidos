@@ -53,11 +53,12 @@ static bool path_matches_allowed(const char* path) {
 static errno_t copyin_path_bounded(const char* user_path, char* out, size_t out_len) {
     // Copy a userspace pathname one byte at a time until NUL or max length.
     // Bytewise copyin avoids requiring the whole max buffer to be mapped.
-    if (!user_path || !out || out_len < 2) return -EFAULT;
+    if (!user_path || !out || out_len < 2) return EFAULT;
 
     for (size_t i = 0; i < out_len; i++) {
         char ch = '\0';
-        errno_t err = copyin((const void*)((uintptr_t)user_path + i), &ch, 1);
+        errno_t err = ESUCCESS;
+        copyin((const void*)((uintptr_t)user_path + i), &ch, 1, &err);
         if (err != ESUCCESS) return err;
 
         out[i] = ch;
@@ -66,7 +67,7 @@ static errno_t copyin_path_bounded(const char* user_path, char* out, size_t out_
 
     // No terminator seen within bound.
     out[out_len - 1] = '\0';
-    return -ENAMETOOLONG;
+    return ENAMETOOLONG;
 }
 
 // execve(2) system call scaffold -- not quite the real thing yet
@@ -96,9 +97,10 @@ ssize_t _execve(trap_frame_t* tf) {
 
     // Copy path string into kernel memory with sanity checks
     char kpath[EXEC_PATH_MAX];
+
     errno_t cpy = copyin_path_bounded(user_path, kpath, sizeof(kpath));
     if (cpy != ESUCCESS)
-        return cpy;
+        return -cpy;
 
     // Path lookup
     if (!path_matches_allowed(kpath))
@@ -161,16 +163,17 @@ ssize_t _execve(trap_frame_t* tf) {
     process_t* proc = sched_current_process();
     mm_t* old_mm = proc->addr_space;
 
-    proc->addr_space = new_mm;
-    mm_switch(new_mm);      // writes new_mm->cr3_phys into CR3
-    mm_destroy(old_mm);     // reclaims all old user pages, PTs, PD, VMAs
-
     // Reset trap frame
     if (!tf_has_user_tail(tf)) {
         // Should never happen due to TF check at the beginning, but here
         // just in case
         return -EINVAL;
     }
+
+    // Commit new address space
+    proc->addr_space = new_mm;
+    mm_switch(new_mm);      // writes new_mm->cr3_phys into CR3
+    mm_destroy(old_mm);     // reclaims all old user pages, PTs, PD, VMAs
 
     // User stack pointer: top of stack page, aligned down 16 bytes.
     // The 16-byte alignment satisfies the i386 ABI stack alignment convention

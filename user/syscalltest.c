@@ -5,8 +5,10 @@
 static void sys_write(const char* buf, uint32_t len);
 static void sys_exit(uint32_t code);
 static uint32_t sys_execve(const char* path);
+
 static void test_execve(void);
 static void test_fork(void);
+static void test_write(void);
 
 // Convenience: write a string literal without manually passing its length.
 #define WRITE_LIT(s) sys_write((s), sizeof(s) - 1)
@@ -20,9 +22,17 @@ static volatile uint32_t g_sentinel = 0;
 
 void _start(void) {
     //test_execve();
-    test_fork();
+    //test_fork();
+    test_write();
 
     for (;;) {} // unreachable safety net
+}
+
+static void test_write(void) {
+    // Test that sys_write can write a string to the console without crashing.
+    // This validates that the syscall handler, argument passing, and
+    // copyin from user to kernel space are all basically working.
+    WRITE_LIT("Hello from syscalltest!\r\n");
 }
 
 static void test_fork(void) {

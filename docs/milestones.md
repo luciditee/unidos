@@ -218,19 +218,22 @@ Exit criteria:
 Goal: load arbitrary user programs from disk.
 
 ### 8.0 Object model + FD groundwork (do first)
-- [ ] Introduce kernel object model with refcount + type tags (`file`, `vnode`, `blockdev`).
-- [ ] Add per-process file descriptor table + system-wide open file table.
-- [ ] Preserve current console-only behavior while plumbing generic `read`/`write`/`close` file ops.
-- [ ] Reserve a straightforward path for exposing block devices as file descriptors later.
+- [X] Introduce kernel object model with refcount + type tags (`file`, `vnode`, `blockdev`).
+- [X] Add per-process file descriptor table + system-wide open file table.
+- [~] Preserve current console-only behavior while plumbing generic `read`/`write`/`close` file ops.
+- [ ] Reserve and document block-device FD path (`open_file` -> `file_target` -> block layer).
 
-### 8.1 Device discovery + generic block layer
-- [ ] Define `block_device` + `block_ops` API (`read_blocks`, `write_blocks`, `flush`, `get_info`).
+### 8.1 Device discovery + generic block layer (floppy first, read/write v1)
+- [ ] Define `block_device` + `block_ops` API (`read_blocks`, `write_blocks`, `flush`, `get_info`) with write support required in v1.
 - [ ] Use LBA + block-count API for all higher layers (no filesystem assumptions at block layer).
-- [ ] Add driver probe registry (ordered list of probe functions) at init time.
-- [ ] Enumerate supported devices and register canonical handles (`fd0`, later `hd0`, etc.).
-- [ ] Add retry + surfaced error reporting at block layer boundaries.
+- [ ] Bring up floppy FDC backend first; register canonical handle (`fd0`) to exercise existing floppy image-injection flow end-to-end.
+- [ ] Keep driver probe registry shape (ordered probe list) at init, even if only floppy is populated first.
+- [ ] Enumerate supported devices and register canonical handles (`fd0` first, later `hd0`, etc.).
+- [ ] Add retry + surfaced error reporting at block-layer boundaries.
+- [ ] Leave inline TODO hooks at key block/device glue points where partition offset/length translation will attach once MBR support is enabled.
 
-### 8.2 Partition shim (MBR only for now)
+### 8.2 Partition shim (MBR only, deferred during floppy-only bring-up)
+- [ ] Defer active MBR parsing while floppy is the only target; keep whole-device paths usable until fixed-disk support lands.
 - [ ] Add thin MBR parser for partition-capable block devices.
 - [ ] Expose each partition as a child block device (`<dev>p1..p4`) with LBA offset/length.
 - [ ] Keep partition handling transparent to filesystem code (filesystem sees a normal block handle).
@@ -256,7 +259,7 @@ Goal: load arbitrary user programs from disk.
 ### 8.5 FAT family driver (single core for FAT12/16/32)
 - [ ] Implement one FAT driver with runtime FAT-type detection from BPB + cluster count.
 - [ ] Keep FAT-type differences opaque above the filesystem layer.
-- [ ] Implement read-only FAT12 first, then generalize code paths to FAT16/32.
+- [ ] Implement FAT12 read-first path while keeping write-capable plumbing intact to avoid API churn; then generalize to FAT16/32.
 - [ ] Implement path traversal + directory iteration + regular file read.
 
 ### 8.6 FAT permission sidecar (`UNIDOS.PRM`)

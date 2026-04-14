@@ -18,20 +18,33 @@ static int range_check(uint32_t start, size_t n, int want_user) {
     return 1;
 }
 
-errno_t copyout(const void* ksrc, void* udest, size_t n) {
+ssize_t copyout(const void* ksrc, void* udest, size_t n, errno_t* err_out) {
     // Copy a buffer of size n from kernel space (ksrc) to user space (udest).
     // Returns 0 on success, or an error code on failure.
-    if (get_current_cpl() != CPL_KERNEL)
-        return -EPERM; // copyout should only be called from kernel context
+    if (get_current_cpl() != CPL_KERNEL) {
+        if (err_out) *err_out = EPERM;
+        return 0; // copyout should only be called from kernel context
+    }
 
-    if (!ksrc || !udest)
-        return -EFAULT;
+    if (err_out) *err_out = ESUCCESS; // default to success
 
-    if (!n) return ESUCCESS; // nothing to copy, trivially succeed
+    if (!ksrc || !udest) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
+
+    if (!n) return 0; // nothing to copy, trivially succeed
 
     // Validate pointer ranges
-    if (!range_check((uint32_t)ksrc, n, 0)) return -EFAULT;
-    if (!range_check((uint32_t)udest, n, 1)) return -EFAULT;
+    if (!range_check((uint32_t)ksrc, n, 0)) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
+
+    if (!range_check((uint32_t)udest, n, 1)) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
         
     // Validate that all destination user pages are mapped, user, and writable.
     uint32_t d = (uint32_t)udest;
@@ -43,9 +56,20 @@ errno_t copyout(const void* ksrc, void* udest, size_t n) {
     for (uint32_t va = first_page;; va += 0x1000u) {
         paging_query_result_t res;
         paging_status_t status = paging_query_page(va, &res);
-        if (status != PAGING_OK || !res.mapped) return -EFAULT; // not mapped
-        if ((res.flags & PG_USER) == 0) return -EFAULT; // not user-accessible
-        if ((res.flags & PG_RW) == 0) return -EFAULT; // not writable
+        if (status != PAGING_OK || !res.mapped) {
+            if (err_out) *err_out = EFAULT;
+            return 0; // not mapped
+        }
+
+        if ((res.flags & PG_USER) == 0) {
+            if (err_out) *err_out = EFAULT;
+            return 0; // not user-accessible
+        }
+
+        if ((res.flags & PG_RW) == 0) {
+            if (err_out) *err_out = EFAULT;
+            return 0; // not writable
+        }
 
         if (va == last_page) break;
     }
@@ -56,24 +80,35 @@ errno_t copyout(const void* ksrc, void* udest, size_t n) {
     // mechanism to prevent mappings from changing (could use PT OS-defined attrib
     // bits for this). For now, kmemcpy will suffice.
     kmemcpy(udest, ksrc, n);
-    
-    return ESUCCESS;
+    if (err_out) *err_out = ESUCCESS;
+    return 0;
 }
 
-errno_t copyin(const void* usrc, void* kdest, size_t n) {
+ssize_t copyin(const void* usrc, void* kdest, size_t n, errno_t* err_out) {
     // Copy a buffer of size n from user space (usrc) to kernel space (kdest).
     // Returns 0 on success, or an error code on failure.
-    if (get_current_cpl() != CPL_KERNEL)
-        return -EPERM; // copyin should only be called from kernel context
+    if (get_current_cpl() != CPL_KERNEL) {
+        if (err_out) *err_out = EPERM;
+        return 0; // copyin should only be called from kernel context
+    }
 
-    if (!usrc || !kdest)
-        return -EFAULT;
+    if (!usrc || !kdest) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
 
-    if (!n) return ESUCCESS; // nothing to copy, trivially succeed
+    if (err_out) *err_out = ESUCCESS; // default to success
+    if (!n) return 0; // nothing to copy, trivially succeed
 
     // Validate pointer ranges
-    if (!range_check((uint32_t)usrc, n, 1)) return -EFAULT;
-    if (!range_check((uint32_t)kdest, n, 0)) return -EFAULT;
+    if (!range_check((uint32_t)usrc, n, 1)) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
+    if (!range_check((uint32_t)kdest, n, 0)) {
+        if (err_out) *err_out = EFAULT;
+        return 0;
+    }
         
     // Validate that all source user pages are mapped and user-accessible.
     uint32_t s = (uint32_t)usrc;
@@ -85,8 +120,14 @@ errno_t copyin(const void* usrc, void* kdest, size_t n) {
     for (uint32_t va = first_page;; va += 0x1000u) {
         paging_query_result_t res;
         paging_status_t status = paging_query_page(va, &res);
-        if (status != PAGING_OK || !res.mapped) return -EFAULT; // not mapped
-        if ((res.flags & PG_USER) == 0) return -EFAULT; // not user-accessible
+        if (status != PAGING_OK || !res.mapped) {
+            if (err_out) *err_out = EFAULT;
+            return 0; // not mapped
+        }
+        if ((res.flags & PG_USER) == 0) {
+            if (err_out) *err_out = EFAULT;
+            return 0; // not user-accessible
+        }
 
         if (va == last_page) break;
     }
@@ -94,6 +135,6 @@ errno_t copyin(const void* usrc, void* kdest, size_t n) {
     // Perform copy
     // TODO: See above TODO in copyout
     kmemcpy(kdest, usrc, n);
-    
-    return ESUCCESS;
+    if (err_out) *err_out = ESUCCESS;
+    return 0;
 }

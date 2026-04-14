@@ -77,9 +77,9 @@ uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* o
     }
     uint32_t reserved_frames[PT_MAX + 1] = {0};
     uint32_t remaining = needed_frames_total;
-    kdbg_puts("reserving ", 0x0A);
-    kdbg_hex32(needed_frames_total, 0x0A);
-    kdbg_puts(" page frames for paging structures", 0x0A);
+    //kdbg_puts("reserving ", 0x0A);
+    //kdbg_hex32(needed_frames_total, 0x0A);
+    //kdbg_puts(" page frames for paging structures", 0x0A);
     while (remaining > 0) {
         uint32_t reserved_this_round = 0;
         int res = pmm_reserve_pageframe_seq(remaining, reserved_frames + (needed_frames_total - remaining), &reserved_this_round, true);
@@ -88,10 +88,10 @@ uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* o
                 *out_status = PAGING_ERR_INIT_RESERVE_FAILED;
             return 0;
         }
-        kdbg_puts(".", 0x0A);
+        //kdbg_puts(".", 0x0A);
         remaining -= reserved_this_round;
     }
-    kdbg_puts("done\r\n", 0x0A);
+    //kdbg_puts("done\r\n", 0x0A);
 
     // reserved_frames now contains the physical addresses of the frames we needed,
     // and we need to get their addresses off this function's stack
@@ -195,11 +195,11 @@ uint32_t paging_init_identity_window(uint64_t identity_bytes, paging_status_t* o
     if (out_status)
         *out_status = PAGING_OK;
 
-    kdbg_puts("Identity paging initialized with ", 0x0A);
-    kdbg_hex32(identity_bytes, 0x0A);
-    kdbg_puts(" bytes mapped. PD at ", 0x0A);
-    kdbg_hex32(page_directory_loc_phys, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("Identity paging initialized with ", 0x0A);
+    //kdbg_hex32(identity_bytes, 0x0A);
+    //kdbg_puts(" bytes mapped. PD at ", 0x0A);
+    //kdbg_hex32(page_directory_loc_phys, 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
 
     return page_directory_loc_phys;
 }
@@ -545,137 +545,137 @@ void test_paging() {
     // longer mapped. Finally, remap the same virtual address to a different phys
     // address and assert through querying that the new mapping is correct.
 
-    kdbg_puts("Testing paging...\r\n", 0x0A);
+    //kdbg_puts("Testing paging...\r\n", 0x0A);
 
     uint32_t physA = 0, physB = 0;
 
-    kdbg_puts("Reserving page frame A... ", 0x0A);
+    //kdbg_puts("Reserving page frame A... ", 0x0A);
     paging_status_t res = pmm_reserve_pageframe(&physA, true);
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to reserve page frame for testing paging\r\n", 0x0C);
+        //kdbg_puts("Failed to reserve page frame for testing paging\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("0x", 0x0A); kdbg_hex32(physA, 0x0A); kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("0x", 0x0A); //kdbg_hex32(physA, 0x0A); //kdbg_puts("\r\n", 0x0A);
 
     const uint32_t test_virt = 0x40000000; // arbitrary virtual address for testing
     uint32_t addrOut = 0; 
 
-    kdbg_puts("Mapping page frame A to test virtual address ", 0x0A);
-    kdbg_hex32(test_virt, 0x0A);
-    kdbg_puts("...\r\n", 0x0A);
+    //kdbg_puts("Mapping page frame A to test virtual address ", 0x0A);
+    //kdbg_hex32(test_virt, 0x0A);
+    //kdbg_puts("...\r\n", 0x0A);
     res = paging_map_page(test_virt, physA, PG_RW | PG_USER, &addrOut);
 
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to map page frame for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to map page frame for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("done. Returned physical address: 0x", 0x0A);
-    kdbg_hex32(addrOut, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("done. Returned physical address: 0x", 0x0A);
+    //kdbg_hex32(addrOut, 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
 
     if (physA != addrOut) {
-        kdbg_puts("Mapped physical address does not match reserved frame for testing paging\r\n", 0x0C);
+        //kdbg_puts("Mapped physical address does not match reserved frame for testing paging\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("Remapping page with different flags...\r\n", 0x0A);
+    //kdbg_puts("Remapping page with different flags...\r\n", 0x0A);
 
 
     // Set flags to read-only by using paging_set_flags with PG_RW cleared. This should update the flags in-place without changing the physical address mapping.
     res = paging_set_flags(test_virt, PG_PRESENT | PG_USER); // set flags to PG_PRESENT only (user-accessible)
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to remap page frame for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);  
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to remap page frame for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);  
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("Querying page after remap...\r\n", 0x0A);
+    //kdbg_puts("Querying page after remap...\r\n", 0x0A);
 
     paging_query_result_t queryResult;
     res = paging_query_page(test_virt, &queryResult);
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to query page for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to query page for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
     if (queryResult.phys_addr != physA) {
-        kdbg_puts("Queried physical address does not match reserved frame for testing paging after remap\r\n", 0x0C);
+        //kdbg_puts("Queried physical address does not match reserved frame for testing paging after remap\r\n", 0x0C);
         return;
     }
 
     if (queryResult.flags & PG_RW) {
-        kdbg_puts("Page remap with different flags did not update flags correctly for testing paging\r\n", 0x0C);
+        //kdbg_puts("Page remap with different flags did not update flags correctly for testing paging\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("Unmapping page...\r\n", 0x0A);
+    //kdbg_puts("Unmapping page...\r\n", 0x0A);
     res = paging_unmap_page(test_virt, &addrOut);
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to unmap page for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to unmap page for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("done. Unmapped physical address: 0x", 0x0A);
-    kdbg_hex32(addrOut, 0x0A);
-    kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("done. Unmapped physical address: 0x", 0x0A);
+    //kdbg_hex32(addrOut, 0x0A);
+    //kdbg_puts("\r\n", 0x0A);
 
-    kdbg_puts("Confirming page is unmapped through query...\r\n", 0x0A);
+    //kdbg_puts("Confirming page is unmapped through query...\r\n", 0x0A);
     res = paging_query_page(test_virt, &queryResult);
     if (res != PAGING_ERR_NOT_MAPPED) {
-        kdbg_puts("Querying unmapped page did not return PAGING_ERR_NOT_MAPPED for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Querying unmapped page did not return PAGING_ERR_NOT_MAPPED for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("Page successfully unmapped.\r\n", 0x0A);
+    //kdbg_puts("Page successfully unmapped.\r\n", 0x0A);
 
-    kdbg_puts("Remapping same virtual address to different physical address...\r\n", 0x0A);
+    //kdbg_puts("Remapping same virtual address to different physical address...\r\n", 0x0A);
 
-    kdbg_puts("Reserving page frame B... ", 0x0A);
+    //kdbg_puts("Reserving page frame B... ", 0x0A);
     res = pmm_reserve_pageframe(&physB, true);
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to reserve page frame for testing paging\r\n", 0x0C);
+        //kdbg_puts("Failed to reserve page frame for testing paging\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("0x", 0x0A); kdbg_hex32(physB, 0x0A); kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("0x", 0x0A); //kdbg_hex32(physB, 0x0A); //kdbg_puts("\r\n", 0x0A);
 
-    kdbg_puts("Remapping test virtual address to page frame B... ", 0x0A);
+    //kdbg_puts("Remapping test virtual address to page frame B... ", 0x0A);
     res = paging_map_page(test_virt, physB, PG_RW | PG_USER, &addrOut);
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to remap page frame to different physical address for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to remap page frame to different physical address for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("0x", 0x0A); kdbg_hex32(addrOut, 0x0A); kdbg_puts("\r\n", 0x0A);
+    //kdbg_puts("0x", 0x0A); //kdbg_hex32(addrOut, 0x0A); //kdbg_puts("\r\n", 0x0A);
 
-    kdbg_puts("done. Querying page to validate new mapping...\r\n", 0x0A);
+    //kdbg_puts("done. Querying page to validate new mapping...\r\n", 0x0A);
     res = paging_query_page(test_virt, &queryResult);
 
     if (res != PAGING_OK) {
-        kdbg_puts("Failed to query page for testing paging (code ", 0x0C);
-        kdbg_hex32(res, 0x0C);
-        kdbg_puts(")\r\n", 0x0C);
+        //kdbg_puts("Failed to query page for testing paging (code ", 0x0C);
+        //kdbg_hex32(res, 0x0C);
+        //kdbg_puts(")\r\n", 0x0C);
         return;
     }
 
     if (queryResult.phys_addr != physB) {
-        kdbg_puts("Queried physical address does not match new physical address for testing paging\r\n", 0x0C);
+        //kdbg_puts("Queried physical address does not match new physical address for testing paging\r\n", 0x0C);
         return;
     }
 
-    kdbg_puts("Paging test completed successfully\r\n", 0x0A);
+    //kdbg_puts("Paging test completed successfully\r\n", 0x0A);
     return;
 }

@@ -14,12 +14,6 @@
 
 static pid_t g_wait_specific_pid = 0;
 
-static void on_int3(trap_frame_t* tf) {
-    (void)tf;
-    kdbg_puts("INT3 handled in C\r\n", 0x0A);
-    kdbg_dump_current();
-}
-
 static void test_wait_parent_thread(void) {
     kdbg_puts("[wait-selftest] parent: waiting for any child...\r\n", 0x0E);
 
@@ -186,8 +180,9 @@ void kmain() {
     exception_init();
     pic_remap();
     pit_init();    
-    test_paging();
+    //test_paging();
     kb_init();
+    unix_io_init();
     sched_init();
     syscall_init();
     //start_waitpid_selftest();
