@@ -34,6 +34,11 @@ fd_entry_t* fde_fork_copy(fd_entry_t* src) {
         }
         
         copy->of = src->of; // shared open file struct
+
+        // Future TODO: open_file_t.offset is offset_t (64-bit). On i386, con-
+        // current updates to a shared open_file_t offset are not atomic and will
+        // need locking/serialization for concurrent I/O in the future
+
         copy->local_id = src->local_id; // same local ID in child as parent for ease of lookup
 
         if (copy->of)

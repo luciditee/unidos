@@ -42,12 +42,15 @@ static ssize_t __write_copyin(const char* str, size_t len, errno_t* err_out, ope
 
         if (write_res != (ssize_t)chunk) {
             // Short write without a backend error is still a successful partial write.
-            of->offset += (write_res > 0) ? (uint32_t)write_res : 0;
+            // NOTE: on i386, 64-bit offset_t updates are not atomic. If multiple
+            // threads can share one open_file_t, this must be guarded by locking
+            of->offset += (write_res > 0) ? (offset_t)write_res : 0;
             return (ssize_t)offset + ((write_res > 0) ? write_res : 0);
         }
 
         // If here, we successfully wrote the chunk (or the relevant part)
-        of->offset += (uint32_t)chunk;
+        // NOTE: same atomicity caveat as above for shared open_file_t updates.
+        of->offset += (offset_t)chunk;
         offset += chunk;
         remaining -= chunk;
     }

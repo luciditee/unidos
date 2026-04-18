@@ -73,6 +73,7 @@ set(KERNEL_C_SOURCES
   ${CMAKE_SOURCE_DIR}/kernel/io/fdpool.c
   ${CMAKE_SOURCE_DIR}/kernel/io/openfile.c
   ${CMAKE_SOURCE_DIR}/kernel/io/console.c
+  ${CMAKE_SOURCE_DIR}/kernel/io/blkdev.c
 )
 
 set(KERNEL_INCLUDE_DIRS

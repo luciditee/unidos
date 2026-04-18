@@ -220,11 +220,11 @@ Goal: load arbitrary user programs from disk.
 ### 8.0 Object model + FD groundwork (do first)
 - [X] Introduce kernel object model with refcount + type tags (`file`, `vnode`, `blockdev`).
 - [X] Add per-process file descriptor table + system-wide open file table.
-- [~] Preserve current console-only behavior while plumbing generic `read`/`write`/`close` file ops.
-- [ ] Reserve and document block-device FD path (`open_file` -> `file_target` -> block layer).
+- [X] Preserve current console-only behavior while plumbing generic `read`/`write`/`close` file ops.
+- [X] Reserve and document block-device FD path (`open_file` -> `file_target` -> block layer).
 
 ### 8.1 Device discovery + generic block layer (floppy first, read/write v1)
-- [ ] Define `block_device` + `block_ops` API (`read_blocks`, `write_blocks`, `flush`, `get_info`) with write support required in v1.
+- [~] Define `block_device` + `block_ops` API (`read_blocks`, `write_blocks`, `flush`, `get_info`) with write support required in v1.
 - [ ] Use LBA + block-count API for all higher layers (no filesystem assumptions at block layer).
 - [ ] Bring up floppy FDC backend first; register canonical handle (`fd0`) to exercise existing floppy image-injection flow end-to-end.
 - [ ] Keep driver probe registry shape (ordered probe list) at init, even if only floppy is populated first.

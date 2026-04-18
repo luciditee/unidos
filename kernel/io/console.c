@@ -16,8 +16,8 @@ static console_t consoles[CONSOLE_COUNT]; // for now, just one, but this'll ulti
 // Forward declaration of console ops
 void console_op_get(kobject_t* obj);
 void console_op_put(kobject_t* obj);
-static ssize_t console_read(file_target_t* target, void* buffer, size_t length, uint32_t offset, void* context);
-static ssize_t console_write(file_target_t* target, const void* buffer, size_t length, uint32_t offset, void* context);
+static ssize_t console_read(file_target_t* target, void* buffer, size_t length, offset_t offset, void* context);
+static ssize_t console_write(file_target_t* target, const void* buffer, size_t length, offset_t offset, void* context);
 
 void console_init(void) {
     // Initialize block device descriptors for output/input (stdout/stdin/stderr will eventually point here)
@@ -60,7 +60,7 @@ void console_op_put(kobject_t* obj) {
     (void)obj;
 }
 
-static ssize_t console_read(file_target_t* target, void* buffer, size_t length, uint32_t offset, void* context) {
+static ssize_t console_read(file_target_t* target, void* buffer, size_t length, offset_t offset, void* context) {
     (void)target;
     (void)buffer;
     (void)length;
@@ -71,7 +71,7 @@ static ssize_t console_read(file_target_t* target, void* buffer, size_t length, 
     return -EAGAIN;
 }
 
-static ssize_t console_write(file_target_t* target, const void* buffer, size_t length, uint32_t offset, void* context) {
+static ssize_t console_write(file_target_t* target, const void* buffer, size_t length, offset_t offset, void* context) {
     (void)target;
     (void)offset;
     (void)context;

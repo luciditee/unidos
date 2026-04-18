@@ -2,29 +2,67 @@
 #pragma once
 
 #include "kobject.h"
-#include "sys/types.h"
+#include "../sys/types.h"
 #include "../errno.h"
 
 #define PIPE_BUFFER_SIZE 4096
 
 typedef struct file_target file_target_t;
 typedef struct open_file open_file_t;
+typedef struct kblkdev kblkdev_t;
+typedef struct kblkdev_info kblkdev_info_t;
 
-typedef ssize_t (*file_target_read_fn)(file_target_t* target, void* buffer, size_t length, uint32_t offset, void* context);
-typedef ssize_t (*file_target_write_fn)(file_target_t* target, const void* buffer, size_t length, uint32_t offset, void* context);
+typedef ssize_t (*file_target_read_fn)(file_target_t* target, void* buffer, size_t length, offset_t offset, void* context);
+typedef ssize_t (*file_target_write_fn)(file_target_t* target, const void* buffer, size_t length, offset_t offset, void* context);
+
+// Reads the specified number of blocks from the specified block device into the given buffer.
+// Returns a positive byte count on success, or a negative errno on failure.
+// Caller is responsible for ensuring block buffer is large enough to hold the requested block count.
+typedef ssize_t (*blkdev_target_read_fn)(kblkdev_t* blk, void* blkbuffer, size_t block_count, offset_t lba);
+
+// Writes the specified number of blocks from the given block buffer to the specified block device.
+// Returns a positive byte count on success, or a negative errno on failure.
+// Note: Caller is responsible for ensuring the block buffer actually contains the requested block count.
+// No bounds-checking is done by the kernel here.
+typedef ssize_t (*blkdev_target_write_fn)(kblkdev_t* blk, const void* blkbuffer, size_t block_count, offset_t lba);
+
+// Flushes any buffered data in the block device to the underlying medium. Returns 0 on success, or a negative errno
+// on failure.
+typedef ssize_t (*blkdev_target_flush_fn)(kblkdev_t* blk);
+
+// Retrieves metadata information about the block device and populates it into the provided kblkdev_info_t
+// instance. Returns 0 on success, or a negative errno on failure.
+typedef ssize_t (*blkdev_target_info_fn)(kblkdev_t* blk, kblkdev_info_t* out_info);
 
 typedef struct file_target_io_ops {
     file_target_read_fn read;
     file_target_write_fn write;
 } file_target_io_ops_t;
 
+typedef struct blkdev_target_io_ops {
+    blkdev_target_read_fn read;
+    blkdev_target_write_fn write;
+    blkdev_target_flush_fn flush;
+    blkdev_target_info_fn get_info;
+} blkdev_target_io_ops_t;
+
 typedef struct vnode {
     uint32_t size;
 } vnode_t;
 
-typedef struct kblkdev {
+struct kblkdev {
     uint32_t block_size;
-} kblkdev_t;
+    blkdev_target_io_ops_t ops;
+    offset_t base_lba; // for use in partitioned devices
+    offset_t span_blocks; // for use in partitioned devices
+    void* driver_context; // driver-defined context pointer
+};
+
+struct kblkdev_info {
+    // TBD, this may change
+    uint32_t block_size;
+    offset_t total_blocks;
+};
 
 // note: metadata only; actual buffers are allocated elsewhere and referenced by pointer
 typedef struct kpipe {
@@ -59,7 +97,10 @@ typedef struct file_target {
 // Systemwide instance representation of an open file
 typedef struct open_file {
     kobject_t kobj; // refcount, flags, typeinfo
-    uint32_t offset; // r/w position tracking
+
+    // Current byte offset for this open file. On i386, 64-bit updates are not
+    // atomic; concurrent writers to the same open_file_t REQUIRE synchronization.
+    offset_t offset;
     file_target_t* target; // the actual thing being referenced by the open file
     uint32_t pool_id; // for bookkeeping which pool slot this open file occupies; used for debugging and potential future deallocation
 } open_file_t;
@@ -94,6 +135,6 @@ void file_target_put(file_target_t* target);
 void open_file_get(open_file_t* of);
 void open_file_put(open_file_t* of);
 
-ssize_t open_file_read(open_file_t* of, void* buffer, size_t length, uint32_t offset, void* context);
-ssize_t open_file_write(open_file_t* of, const void* buffer, size_t length, uint32_t offset, void* context, errno_t* err_out);
+ssize_t open_file_read(open_file_t* of, void* buffer, size_t length, offset_t offset, void* context);
+ssize_t open_file_write(open_file_t* of, const void* buffer, size_t length, offset_t offset, void* context, errno_t* err_out);
 

@@ -50,7 +50,7 @@ void open_file_put(open_file_t* of) {
 	}
 }
 
-ssize_t open_file_read(open_file_t* of, void* buffer, size_t length, uint32_t offset, void* context) {
+ssize_t open_file_read(open_file_t* of, void* buffer, size_t length, offset_t offset, void* context) {
 	if (!of || !of->target)
 		return -EBADFD;
 
@@ -60,7 +60,7 @@ ssize_t open_file_read(open_file_t* of, void* buffer, size_t length, uint32_t of
 	return of->target->io_ops.read(of->target, buffer, length, offset, context);
 }
 
-ssize_t open_file_write(open_file_t* of, const void* buffer, size_t length, uint32_t offset, void* context, errno_t* err_out) {
+ssize_t open_file_write(open_file_t* of, const void* buffer, size_t length, offset_t offset, void* context, errno_t* err_out) {
 	if (!of || !of->target) {
 		if (err_out) *err_out = EBADFD;
 		return 0;
